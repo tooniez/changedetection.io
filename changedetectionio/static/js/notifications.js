@@ -1,56 +1,52 @@
-$(document).ready(function() {
+$(document).ready(function () {
 
-  $('#add-email-helper').click(function (e) {
-    e.preventDefault();
-    email = prompt("Destination email");
-    if(email) {
-      var n = $(".notification-urls");
-      var p=email_notification_prefix;
-      $(n).val( $.trim( $(n).val() )+"\n"+email_notification_prefix+email );
-    }
-  });
+    $('#add-email-helper').click(function (e) {
+        e.preventDefault();
+        email = prompt("Destination email");
+        if (email) {
+            var n = $(".notification-urls");
+            var p = email_notification_prefix;
+            $(n).val($.trim($(n).val()) + "\n" + email_notification_prefix + email);
+        }
+    });
 
-  $('#send-test-notification').click(function (e) {
-    e.preventDefault();
+    $('#send-test-notification').click(function (e) {
+        e.preventDefault();
 
-    // this can be global
-    var csrftoken = $('input[name=csrf_token]').val();
-    $.ajaxSetup({
-        beforeSend: function(xhr, settings) {
-            if (!/^(GET|HEAD|OPTIONS|TRACE)$/i.test(settings.type) && !this.crossDomain) {
-                xhr.setRequestHeader("X-CSRFToken", csrftoken)
+        data = {
+            notification_body: $('#notification_body').val(),
+            notification_format: $('#notification_format').val(),
+            notification_title: $('#notification_title').val(),
+            notification_urls: $('.notification-urls').val(),
+            tags: $('#tags').val(),
+            window_url: window.location.href,
+        }
+
+        $('.notifications-wrapper .spinner').fadeIn();
+        $('#notification-test-log').show();
+        $.ajax({
+            type: "POST",
+            url: notification_base_url,
+            data: data,
+            statusCode: {
+                400: function (data) {
+                    $("#notification-test-log>span").text(data.responseText);
+                },
             }
-        }
-    })
-
-    data = {
-        window_url : window.location.href,
-        notification_urls : $('.notification-urls').val(),
-    }
-    for (key in data) {
-      if (!data[key].length) {
-        alert(key+" is empty, cannot send test.")
-        return;
-      }
-    }
-
-    $.ajax({
-      type: "POST",
-      url: notification_base_url,
-      data : data,
-        statusCode: {
-        400: function() {
-            // More than likely the CSRF token was lost when the server restarted
-          alert("There was a problem processing the request, please reload the page.");
-        }
-      }
-    }).done(function(data){
-      console.log(data);
-      alert('Sent');
-    }).fail(function(data){
-      console.log(data);
-      alert('There was an error communicating with the server.');
-    })
-  });
+        }).done(function (data) {
+            $("#notification-test-log>span").text(data);
+        }).fail(function (jqXHR, textStatus, errorThrown) {
+            // Handle connection refused or other errors
+            if (textStatus === "error" && errorThrown === "") {
+                console.error("Connection refused or server unreachable");
+                $("#notification-test-log>span").text("Error: Connection refused or server is unreachable.");
+            } else {
+                console.error("Error:", textStatus, errorThrown);
+                $("#notification-test-log>span").text("An error occurred: " + textStatus);
+            }
+        }).always(function () {
+            $('.notifications-wrapper .spinner').hide();
+        })
+    });
 });
 

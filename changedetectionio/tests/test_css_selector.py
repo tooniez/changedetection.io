@@ -1,8 +1,8 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 
 import time
 from flask import url_for
-from . util import live_server_setup
+from .util import live_server_setup, wait_for_all_checks
 
 from ..html_tools import *
 
@@ -70,7 +70,7 @@ def test_include_filters_output():
 
 
 # Tests the whole stack works with the CSS Filter
-def test_check_markup_include_filters_restriction(client, live_server):
+def test_check_markup_include_filters_restriction(client, live_server, measure_memory_usage):
     sleep_time_for_fetch_thread = 3
 
     include_filters = "#sametext"
@@ -124,9 +124,8 @@ def test_check_markup_include_filters_restriction(client, live_server):
 
 
 # Tests the whole stack works with the CSS Filter
-def test_check_multiple_filters(client, live_server):
-    sleep_time_for_fetch_thread = 3
-
+def test_check_multiple_filters(client, live_server, measure_memory_usage):
+    #live_server_setup(live_server)
     include_filters = "#blob-a\r\nxpath://*[contains(@id,'blob-b')]"
 
     with open("test-datastore/endpoint-content.txt", "w") as f:
@@ -138,9 +137,6 @@ def test_check_multiple_filters(client, live_server):
      </html>
     """)
 
-    # Give the endpoint time to spin up
-    time.sleep(1)
-
     # Add our URL to the import page
     test_url = url_for('test_endpoint', _external=True)
     res = client.post(
@@ -149,7 +145,7 @@ def test_check_multiple_filters(client, live_server):
         follow_redirects=True
     )
     assert b"1 Imported" in res.data
-    time.sleep(1)
+    wait_for_all_checks(client)
 
     # Goto the edit page, add our ignore text
     # Add our URL to the import page
@@ -165,7 +161,7 @@ def test_check_multiple_filters(client, live_server):
     assert b"Updated watch." in res.data
 
     # Give the thread time to pick it up
-    time.sleep(sleep_time_for_fetch_thread)
+    wait_for_all_checks(client)
 
     res = client.get(
         url_for("preview_page", uuid="first"),
@@ -176,3 +172,77 @@ def test_check_multiple_filters(client, live_server):
     assert b"Blob A" in res.data # CSS was ok
     assert b"Blob B" in res.data # xPath was ok
     assert b"Blob C" not in res.data # Should not be included
+
+# The filter exists, but did not contain anything useful
+# Mainly used when the filter contains just an IMG, this can happen when someone selects an image in the visual-selector
+# Tests fetcher can throw a "ReplyWithContentButNoText" exception after applying filter and extracting text
+def test_filter_is_empty_help_suggestion(client, live_server, measure_memory_usage):
+    #live_server_setup(live_server)
+
+    include_filters = "#blob-a"
+
+    with open("test-datastore/endpoint-content.txt", "w") as f:
+        f.write("""<html><body>
+         <div id="blob-a">
+           <img src="something.jpg">
+         </div>
+         </body>
+         </html>
+        """)
+
+
+    # Add our URL to the import page
+    test_url = url_for('test_endpoint', _external=True)
+    res = client.post(
+        url_for("import_page"),
+        data={"urls": test_url},
+        follow_redirects=True
+    )
+    assert b"1 Imported" in res.data
+    wait_for_all_checks(client)
+
+    # Goto the edit page, add our ignore text
+    # Add our URL to the import page
+    res = client.post(
+        url_for("edit_page", uuid="first"),
+        data={"include_filters": include_filters,
+              "url": test_url,
+              "tags": "",
+              "headers": "",
+              'fetch_backend': "html_requests"},
+        follow_redirects=True
+    )
+    assert b"Updated watch." in res.data
+
+    wait_for_all_checks(client)
+
+
+    res = client.get(
+        url_for("index"),
+        follow_redirects=True
+    )
+
+    assert b'empty result or contain only an image' in res.data
+
+
+    ### Just an empty selector, no image
+
+    with open("test-datastore/endpoint-content.txt", "w") as f:
+        f.write("""<html><body>
+         <div id="blob-a">
+           <!-- doo doo -->
+         </div>
+         </body>
+         </html>
+        """)
+
+    res = client.get(url_for("form_watch_checknow"), follow_redirects=True)
+    wait_for_all_checks(client)
+
+    res = client.get(
+        url_for("index"),
+        follow_redirects=True
+    )
+
+    assert b'empty result or contain only an image' not in res.data
+    assert b'but contained no usable text' in res.data

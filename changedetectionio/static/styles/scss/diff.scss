@@ -24,6 +24,7 @@
     vertical-align: top;
     font: 1em monospace;
     text-align: left;
+    overflow: clip; // clip overflowing contents to cell boundariess
   }
 
   pre {
@@ -50,6 +51,8 @@ ins {
 
 #result {
   white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: break-word;
 
   .change {
     span {}
@@ -76,6 +79,13 @@ ins {
 
   ins {
     padding: 0.5em;
+  }
+
+  option:checked {
+    font-weight: bold;
+  }
+  [type=radio],[type=checkbox] {
+    vertical-align: middle;
   }
 }
 
@@ -118,4 +128,24 @@ td#diff-col div {
   img {
     max-width: 99%;
   }
+}
+
+#highlightSnippet {
+  background: var(--color-background);
+  padding: 1em;
+  border-radius: 5px;
+  background: var(--color-background);
+  box-shadow: 1px 1px 4px var(--color-shadow-jump);
+}
+
+// resets button margin to 0px
+.pure-form button.reset-margin {
+  margin: 0px;
+}
+
+.diff-fieldset {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
 }

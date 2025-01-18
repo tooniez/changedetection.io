@@ -1,9 +1,13 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 
 import os
 import time
 import re
 from random import randint
+from loguru import logger
+
+from changedetectionio.content_fetchers.base import manage_user_agent
+from changedetectionio.safe_jinja import render as jinja_render
 
 # Two flags, tell the JS which of the "Selector" or "Value" field should be enabled in the front end
 # 0- off, 1- on
@@ -21,6 +25,7 @@ browser_step_ui_config = {'Choose one': '0 0',
                           'Click element if exists': '1 0',
                           'Click element': '1 0',
                           'Click element containing text': '0 1',
+                          'Click element containing text if exists': '0 1',
                           'Enter text in field': '1 1',
                           'Execute JS': '0 1',
 #                          'Extract text and use as filter': '1 0',
@@ -45,6 +50,10 @@ browser_step_ui_config = {'Choose one': '0 0',
 # ONLY Works in Playwright because we need the fullscreen screenshot
 class steppable_browser_interface():
     page = None
+    start_url = None
+
+    def __init__(self, start_url):
+        self.start_url = start_url
 
     # Convert and perform "Click Button" for example
     def call_action(self, action_name, selector=None, optional_value=None):
@@ -53,7 +62,7 @@ class steppable_browser_interface():
         if call_action_name == 'choose_one':
             return
 
-        print("> action calling", call_action_name)
+        logger.debug(f"> Action calling '{call_action_name}'")
         # https://playwright.dev/python/docs/selectors#xpath-selectors
         if selector and selector.startswith('/') and not selector.startswith('//'):
             selector = "xpath=" + selector
@@ -61,36 +70,50 @@ class steppable_browser_interface():
         action_handler = getattr(self, "action_" + call_action_name)
 
         # Support for Jinja2 variables in the value and selector
-        from jinja2 import Environment
-        jinja2_env = Environment(extensions=['jinja2_time.TimeExtension'])
 
         if selector and ('{%' in selector or '{{' in selector):
-            selector = str(jinja2_env.from_string(selector).render())
+            selector = jinja_render(template_str=selector)
 
         if optional_value and ('{%' in optional_value or '{{' in optional_value):
-            optional_value = str(jinja2_env.from_string(optional_value).render())
+            optional_value = jinja_render(template_str=optional_value)
 
         action_handler(selector, optional_value)
         self.page.wait_for_timeout(1.5 * 1000)
-        print("Call action done in", time.time() - now)
+        logger.debug(f"Call action done in {time.time()-now:.2f}s")
 
     def action_goto_url(self, selector=None, value=None):
         # self.page.set_viewport_size({"width": 1280, "height": 5000})
         now = time.time()
-        response = self.page.goto(value, timeout=0, wait_until='commit')
+        response = self.page.goto(value, timeout=0, wait_until='load')
+        # Should be the same as the puppeteer_fetch.js methods, means, load with no timeout set (skip timeout)
+        #and also wait for seconds ?
+        #await page.waitForTimeout(1000);
+        #await page.waitForTimeout(extra_wait_ms);
+        logger.debug(f"Time to goto URL {time.time()-now:.2f}s")
+        return response
 
-        # Wait_until = commit
-        # - `'commit'` - consider operation to be finished when network response is received and the document started loading.
-        # Better to not use any smarts from Playwright and just wait an arbitrary number of seconds
-        # This seemed to solve nearly all 'TimeoutErrors'
-        print("Time to goto URL ", time.time() - now)
+    # Incase they request to go back to the start
+    def action_goto_site(self, selector=None, value=None):
+        return self.action_goto_url(value=self.start_url)
 
     def action_click_element_containing_text(self, selector=None, value=''):
+        logger.debug("Clicking element containing text")
         if not len(value.strip()):
             return
         elem = self.page.get_by_text(value)
         if elem.count():
             elem.first.click(delay=randint(200, 500), timeout=3000)
+
+    def action_click_element_containing_text_if_exists(self, selector=None, value=''):
+        logger.debug("Clicking element containing text if exists")
+        if not len(value.strip()):
+            return
+        elem = self.page.get_by_text(value)
+        logger.debug(f"Clicking element containing text - {elem.count()} elements found")
+        if elem.count():
+            elem.first.click(delay=randint(200, 500), timeout=3000)
+        else:
+            return
 
     def action_enter_text_in_field(self, selector, value):
         if not len(selector.strip()):
@@ -99,18 +122,19 @@ class steppable_browser_interface():
         self.page.fill(selector, value, timeout=10 * 1000)
 
     def action_execute_js(self, selector, value):
-        self.page.evaluate(value)
+        response = self.page.evaluate(value)
+        return response
 
     def action_click_element(self, selector, value):
-        print("Clicking element")
+        logger.debug("Clicking element")
         if not len(selector.strip()):
             return
 
         self.page.click(selector=selector, timeout=30 * 1000, delay=randint(200, 500))
 
     def action_click_element_if_exists(self, selector, value):
-        import playwright._impl._api_types as _api_types
-        print("Clicking element if exists")
+        import playwright._impl._errors as _api_types
+        logger.debug("Clicking element if exists")
         if not len(selector.strip()):
             return
         try:
@@ -122,6 +146,9 @@ class steppable_browser_interface():
             return
 
     def action_click_x_y(self, selector, value):
+        if not re.match(r'^\s?\d+\s?,\s?\d+\s?$', value):
+            raise Exception("'Click X,Y' step should be in the format of '100 , 90'")
+
         x, y = value.strip().split(',')
         x = int(float(x.strip()))
         y = int(float(y.strip()))
@@ -138,13 +165,13 @@ class steppable_browser_interface():
     def action_wait_for_text(self, selector, value):
         import json
         v = json.dumps(value)
-        self.page.wait_for_function(f'document.querySelector("body").innerText.includes({v});', timeout=90000)
+        self.page.wait_for_function(f'document.querySelector("body").innerText.includes({v});', timeout=30000)
 
     def action_wait_for_text_in_element(self, selector, value):
         import json
         s = json.dumps(selector)
         v = json.dumps(value)
-        self.page.wait_for_function(f'document.querySelector({s}).innerText.includes({v});', timeout=90000)
+        self.page.wait_for_function(f'document.querySelector({s}).innerText.includes({v});', timeout=30000)
 
     # @todo - in the future make some popout interface to capture what needs to be set
     # https://playwright.dev/python/docs/api/class-keyboard
@@ -164,7 +191,7 @@ class steppable_browser_interface():
         self.page.locator(selector, timeout=1000).uncheck(timeout=1000)
 
 
-# Responsible for maintaining a live 'context' with browserless
+# Responsible for maintaining a live 'context' with the chrome CDP
 # @todo - how long do contexts live for anyway?
 class browsersteps_live_ui(steppable_browser_interface):
     context = None
@@ -173,6 +200,7 @@ class browsersteps_live_ui(steppable_browser_interface):
     stale = False
     # bump and kill this if idle after X sec
     age_start = 0
+    headers = {}
 
     # use a special driver, maybe locally etc
     command_executor = os.getenv(
@@ -187,9 +215,11 @@ class browsersteps_live_ui(steppable_browser_interface):
 
     browser_type = os.getenv("PLAYWRIGHT_BROWSER_TYPE", 'chromium').strip('"')
 
-    def __init__(self, playwright_browser, proxy=None):
+    def __init__(self, playwright_browser, proxy=None, headers=None, start_url=None):
+        self.headers = headers or {}
         self.age_start = time.time()
         self.playwright_browser = playwright_browser
+        self.start_url = start_url
         if self.context is None:
             self.connect(proxy=proxy)
 
@@ -201,15 +231,16 @@ class browsersteps_live_ui(steppable_browser_interface):
 
         # @todo handle multiple contexts, bind a unique id from the browser on each req?
         self.context = self.playwright_browser.new_context(
-            # @todo
-            #                user_agent=request_headers['User-Agent'] if request_headers.get('User-Agent') else 'Mozilla/5.0',
-            #               proxy=self.proxy,
-            # This is needed to enable JavaScript execution on GitHub and others
-            bypass_csp=True,
-            # Should never be needed
-            accept_downloads=False,
-            proxy=proxy
+            accept_downloads=False,  # Should never be needed
+            bypass_csp=True,  # This is needed to enable JavaScript execution on GitHub and others
+            extra_http_headers=self.headers,
+            ignore_https_errors=True,
+            proxy=proxy,
+            service_workers=os.getenv('PLAYWRIGHT_SERVICE_WORKERS', 'allow'),
+            # Should be `allow` or `block` - sites like YouTube can transmit large amounts of data via Service Workers
+            user_agent=manage_user_agent(headers=self.headers),
         )
+
 
         self.page = self.context.new_page()
 
@@ -223,11 +254,11 @@ class browsersteps_live_ui(steppable_browser_interface):
         # Listen for all console events and handle errors
         self.page.on("console", lambda msg: print(f"Browser steps console - {msg.type}: {msg.text} {msg.args}"))
 
-        print("Time to browser setup", time.time() - now)
+        logger.debug(f"Time to browser setup {time.time()-now:.2f}s")
         self.page.wait_for_timeout(1 * 1000)
 
     def mark_as_closed(self):
-        print("Page closed, cleaning up..")
+        logger.debug("Page closed, cleaning up..")
 
     @property
     def has_expired(self):
@@ -237,8 +268,9 @@ class browsersteps_live_ui(steppable_browser_interface):
 
     def get_current_state(self):
         """Return the screenshot and interactive elements mapping, generally always called after action_()"""
-        from pkg_resources import resource_string
-        xpath_element_js = resource_string(__name__, "../../res/xpath_element_scraper.js").decode('utf-8')
+        import importlib.resources
+        xpath_element_js = importlib.resources.files("changedetectionio.content_fetchers.res").joinpath('xpath_element_scraper.js').read_text()
+
         now = time.time()
         self.page.wait_for_timeout(1 * 1000)
 
@@ -253,7 +285,7 @@ class browsersteps_live_ui(steppable_browser_interface):
         xpath_data = self.page.evaluate("async () => {" + xpath_element_js + "}")
         # So the JS will find the smallest one first
         xpath_data['size_pos'] = sorted(xpath_data['size_pos'], key=lambda k: k['width'] * k['height'], reverse=True)
-        print("Time to complete get_current_state of browser", time.time() - now)
+        logger.debug(f"Time to complete get_current_state of browser {time.time()-now:.2f}s")
         # except
         # playwright._impl._api_types.Error: Browser closed.
         # @todo show some countdown timer?
@@ -269,14 +301,12 @@ class browsersteps_live_ui(steppable_browser_interface):
         :param current_include_filters:
         :return:
         """
-
+        import importlib.resources
         self.page.evaluate("var include_filters=''")
-        from pkg_resources import resource_string
-        # The code that scrapes elements and makes a list of elements/size/position to click on in the VisualSelector
-        xpath_element_js = resource_string(__name__, "../../res/xpath_element_scraper.js").decode('utf-8')
-        from changedetectionio.content_fetcher import visualselector_xpath_selectors
+        xpath_element_js = importlib.resources.files("changedetectionio.content_fetchers.res").joinpath('xpath_element_scraper.js').read_text()
+        from changedetectionio.content_fetchers import visualselector_xpath_selectors
         xpath_element_js = xpath_element_js.replace('%ELEMENTS%', visualselector_xpath_selectors)
         xpath_data = self.page.evaluate("async () => {" + xpath_element_js + "}")
-        screenshot = self.page.screenshot(type='jpeg', full_page=True, quality=int(os.getenv("PLAYWRIGHT_SCREENSHOT_QUALITY", 72)))
+        screenshot = self.page.screenshot(type='jpeg', full_page=True, quality=int(os.getenv("SCREENSHOT_QUALITY", 72)))
 
         return (screenshot, xpath_data)

@@ -1,76 +1,102 @@
-eventlet>=0.31.0
+# Used by Pyppeteer
+pyee
+
+eventlet>=0.38.0
 feedgen~=0.9
 flask-compress
-flask-login~=0.5
+# 0.6.3 included compatibility fix for werkzeug 3.x (2.x had deprecation of url handlers)
+flask-login>=0.6.3
 flask-paginate
 flask_expects_json~=1.7
 flask_restful
-flask_wtf
-flask~=2.0
+flask_cors # For the Chrome extension to operate
+flask_wtf~=1.2
+flask~=2.3
 inscriptis~=2.2
 pytz
 timeago~=1.0
-validators
+validators~=0.21
+
 
 # Set these versions together to avoid a RequestsDependencyWarning
 # >= 2.26 also adds Brotli support if brotli is installed
 brotli~=1.0
-requests[socks] ~=2.28
+requests[socks]
+requests-file
 
-urllib3>1.26
+urllib3==1.26.19
 chardet>2.3.0
 
 wtforms~=3.0
 jsonpath-ng~=1.5.3
 
-
-# dnspython 2.3.0 is not compatible with eventlet
-# * https://github.com/eventlet/eventlet/issues/781
-# * https://datastax-oss.atlassian.net/browse/PYTHON-1320
-dnspython<2.3.0
+dnspython==2.6.1 # related to eventlet fixes
 
 # jq not available on Windows so must be installed manually
 
 # Notification library
-apprise~=1.4.5
+apprise==1.9.2
 
 # apprise mqtt https://github.com/dgtlmoon/changedetection.io/issues/315
-paho-mqtt
+# use any version other than 2.0.x due to https://github.com/eclipse/paho.mqtt.python/issues/814
+paho-mqtt!=2.0.*
 
-# This mainly affects some ARM builds, which unlike the other builds ignores "ARG CRYPTOGRAPHY_DONT_BUILD_RUST=1"
-# so without this pinning, the newer versions on ARM will forcefully try to build rust, which results in "rust compiler not found"
-# (introduced once apprise became a dep)
-cryptography~=3.4
+# Requires extra wheel for rPi
+cryptography~=42.0.8
 
 # Used for CSS filtering
 beautifulsoup4
 
 # XPath filtering, lxml is required by bs4 anyway, but put it here to be safe.
-lxml
+# #2328 - 5.2.0 and 5.2.1 had extra CPU flag CFLAGS set which was not compatible on older hardware
+#         It could be advantageous to run its own pypi package here with those performance flags set
+#         https://bugs.launchpad.net/lxml/+bug/2059910/comments/16
+lxml >=4.8.0,<6,!=5.2.0,!=5.2.1
 
-# 3.141 was missing socksVersion, 3.150 was not in pypi, so we try 4.1.0
-selenium~=4.1.0
+# XPath 2.0-3.1 support - 4.2.0 broke something?
+elementpath==4.1.5
 
-# https://stackoverflow.com/questions/71652965/importerror-cannot-import-name-safe-str-cmp-from-werkzeug-security/71653849#71653849
-# ImportError: cannot import name 'safe_str_cmp' from 'werkzeug.security'
-# need to revisit flask login versions
-werkzeug~=2.0.0
+selenium~=4.14.0
+
+# https://github.com/pallets/werkzeug/issues/2985
+# Maybe related to pytest?
+werkzeug==3.0.6
 
 # Templating, so far just in the URLs but in the future can be for the notifications also
 jinja2~=3.1
 jinja2-time
-
+openpyxl
 # https://peps.python.org/pep-0508/#environment-markers
 # https://github.com/dgtlmoon/changedetection.io/pull/1009
-jq~=1.3 ;python_version >= "3.8" and sys_platform == "linux"
+jq~=1.3; python_version >= "3.8" and sys_platform == "darwin"
+jq~=1.3; python_version >= "3.8" and sys_platform == "linux"
 
-# Any current modern version, required so far for screenshot PNG->JPEG conversion but will be used more in the future
-pillow
 # playwright is installed at Dockerfile build time because it's not available on all platforms
+
+pyppeteer-ng==2.0.0rc5
+pyppeteerstealth>=0.0.4
 
 # Include pytest, so if theres a support issue we can ask them to run these tests on their setup
 pytest ~=7.2
 pytest-flask ~=1.2
 
-# Pin jsonschema version to prevent build errors on armv6 while rpds-py wheels aren't available (1708)
-jsonschema==4.17.3
+# Anything 4.0 and up but not 5.0
+jsonschema ~= 4.0
+
+
+loguru
+
+# For scraping all possible metadata relating to products so we can do better restock detection
+extruct
+
+# For cleaning up unknown currency formats
+babel
+
+# Needed for > 3.10, https://github.com/microsoft/playwright-python/issues/2096
+greenlet >= 3.0.3
+
+# Pinned or it causes problems with flask_expects_json which seems unmaintained
+referencing==0.35.1
+
+# Scheduler - Windows seemed to miss a lot of default timezone info (even "UTC" !)
+tzdata

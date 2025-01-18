@@ -1,5 +1,11 @@
 # pip dependencies install stage
-FROM python:3.10-slim-bullseye as builder
+
+# @NOTE! I would love to move to 3.11 but it breaks the async handler in changedetectionio/content_fetchers/puppeteer.py
+#        If you know how to fix it, please do! and test it for both 3.10 and 3.11
+
+ARG PYTHON_VERSION=3.11
+
+FROM python:${PYTHON_VERSION}-slim-bookworm AS builder
 
 # See `cryptography` pin comment in requirements.txt
 ARG CRYPTOGRAPHY_DONT_BUILD_RUST=1
@@ -20,20 +26,23 @@ WORKDIR /install
 
 COPY requirements.txt /requirements.txt
 
-RUN pip install --target=/dependencies -r /requirements.txt
+# --extra-index-url https://www.piwheels.org/simple  is for cryptography module to be prebuilt (or rustc etc needs to be installed)
+RUN pip install --extra-index-url https://www.piwheels.org/simple  --target=/dependencies -r /requirements.txt
 
 # Playwright is an alternative to Selenium
 # Excluded this package from requirements.txt to prevent arm/v6 and arm/v7 builds from failing
 # https://github.com/dgtlmoon/changedetection.io/pull/1067 also musl/alpine (not supported)
-RUN pip install --target=/dependencies playwright~=1.27.1 \
+RUN pip install --target=/dependencies playwright~=1.48.0 \
     || echo "WARN: Failed to install Playwright. The application can still run, but the Playwright option will be disabled."
 
 # Final image stage
-FROM python:3.10-slim-bullseye
+FROM python:${PYTHON_VERSION}-slim-bookworm
+LABEL org.opencontainers.image.source="https://github.com/dgtlmoon/changedetection.io"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libssl1.1 \
     libxslt1.1 \
+    # For presenting price amounts correctly in the restock/price detection overview
+    locales \
     # For pdftohtml
     poppler-utils \
     zlib1g \
@@ -54,12 +63,17 @@ ENV PYTHONPATH=/usr/local
 
 EXPOSE 5000
 
-# The actual flask app
+# The actual flask app module
 COPY changedetectionio /app/changedetectionio
-
-# The eventlet server wrapper
+# Starting wrapper
 COPY changedetection.py /app/changedetection.py
 
-WORKDIR /app
+# Github Action test purpose(test-only.yml).
+# On production, it is effectively LOGGER_LEVEL=''.
+ARG LOGGER_LEVEL=''
+ENV LOGGER_LEVEL "$LOGGER_LEVEL"
 
-CMD [ "python", "./changedetection.py" , "-d", "/datastore"]
+WORKDIR /app
+CMD ["python", "./changedetection.py", "-d", "/datastore"]
+
+

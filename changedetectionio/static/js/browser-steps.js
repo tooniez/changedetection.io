@@ -1,16 +1,7 @@
 $(document).ready(function () {
 
-    // duplicate
-    var csrftoken = $('input[name=csrf_token]').val();
-    $.ajaxSetup({
-        beforeSend: function (xhr, settings) {
-            if (!/^(GET|HEAD|OPTIONS|TRACE)$/i.test(settings.type) && !this.crossDomain) {
-                xhr.setRequestHeader("X-CSRFToken", csrftoken)
-            }
-        }
-    })
     var browsersteps_session_id;
-    var browserless_seconds_remaining = 0;
+    var browser_interface_seconds_remaining = 0;
     var apply_buttons_disabled = false;
     var include_text_elements = $("#include_text_elements");
     var xpath_data = false;
@@ -26,7 +17,8 @@ $(document).ready(function () {
         set_scale();
     });
     // Should always be disabled
-    $('#browser_steps >li:first-child select').val('Goto site').attr('disabled', 'disabled');
+    $('#browser_steps-0-operation option[value="Goto site"]').prop("selected", "selected");
+    $('#browser_steps-0-operation').attr('disabled', 'disabled');
 
     $('#browsersteps-click-start').click(function () {
         $("#browsersteps-click-start").fadeOut();
@@ -49,7 +41,7 @@ $(document).ready(function () {
         $('#browsersteps-img').removeAttr('src');
         $("#browsersteps-click-start").show();
         $("#browsersteps-selector-wrapper .spinner").hide();
-        browserless_seconds_remaining = 0;
+        browser_interface_seconds_remaining = 0;
         browsersteps_session_id = false;
         apply_buttons_disabled = false;
         ctx.clearRect(0, 0, c.width, c.height);
@@ -61,12 +53,12 @@ $(document).ready(function () {
         $('#browser_steps >li:first-child').css('opacity', '0.5');
     }
 
-    // Show seconds remaining until playwright/browserless needs to restart the session
+    // Show seconds remaining until the browser interface needs to restart the session
     // (See comment at the top of changedetectionio/blueprint/browser_steps/__init__.py )
     setInterval(() => {
-        if (browserless_seconds_remaining >= 1) {
-            document.getElementById('browserless-seconds-remaining').innerText = browserless_seconds_remaining + " seconds remaining in session";
-            browserless_seconds_remaining -= 1;
+        if (browser_interface_seconds_remaining >= 1) {
+            document.getElementById('browser-seconds-remaining').innerText = browser_interface_seconds_remaining + " seconds remaining in session";
+            browser_interface_seconds_remaining -= 1;
         }
     }, "1000")
 
@@ -160,6 +152,12 @@ $(document).ready(function () {
                     e.offsetX > item.left * y_scale && e.offsetX < item.left * y_scale + item.width * y_scale
 
                 ) {
+                    // Ignore really large ones, because we are scraping 'div' also from xpath_element_scraper but
+                    // that div or whatever could be some wrapper and would generally make you select the whole page
+                    if (item.width > 800 && item.height > 400) {
+                        return
+                    }
+
                     // There could be many elements here, record them all and then we'll find out which is the most 'useful'
                     // (input, textarea, button, A etc)
                     if (item.width < xpath_data['browser_width']) {
@@ -208,7 +206,7 @@ $(document).ready(function () {
             console.log(x);
             if (x && first_available.length) {
                 // @todo will it let you click shit that has a layer ontop? probably not.
-                if (x['tagtype'] === 'text' || x['tagtype'] === 'email' || x['tagName'] === 'textarea' || x['tagtype'] === 'password' || x['tagtype'] === 'search') {
+                if (x['tagtype'] === 'text' || x['tagtype'] === 'number' || x['tagtype'] === 'email' || x['tagName'] === 'textarea' || x['tagtype'] === 'password' || x['tagtype'] === 'search') {
                     $('select', first_available).val('Enter text in field').change();
                     $('input[type=text]', first_available).first().val(x['xpath']);
                     $('input[placeholder="Value"]', first_available).addClass('ok').click().focus();
@@ -261,7 +259,7 @@ $(document).ready(function () {
             // This should trigger 'Goto site'
             console.log("Got startup response, requesting Goto-Site (first) step fake click");
             $('#browser_steps >li:first-child .apply').click();
-            browserless_seconds_remaining = 500;
+            browser_interface_seconds_remaining = 500;
             set_first_gotosite_disabled();
         }).fail(function (data) {
             console.log(data);
@@ -321,8 +319,14 @@ $(document).ready(function () {
             var s = '<div class="control">' + '<a data-step-index=' + i + ' class="pure-button button-secondary button-green button-xsmall apply" >Apply</a>&nbsp;';
             if (i > 0) {
                 // The first step never gets these (Goto-site)
-                s += '<a data-step-index=' + i + ' class="pure-button button-secondary button-xsmall clear" >Clear</a>&nbsp;' +
-                    '<a data-step-index=' + i + ' class="pure-button button-secondary button-red button-xsmall remove" >Remove</a>';
+                s += `<a data-step-index="${i}" class="pure-button button-secondary button-xsmall clear" >Clear</a>&nbsp;` +
+                    `<a data-step-index="${i}" class="pure-button button-secondary button-red button-xsmall remove" >Remove</a>`;
+
+                // if a screenshot is available
+                if (browser_steps_available_screenshots.includes(i.toString())) {
+                    var d = (browser_steps_last_error_step === i+1) ? 'before' : 'after';
+                    s += `&nbsp;<a data-step-index="${i}" class="pure-button button-secondary button-xsmall show-screenshot" title="Show screenshot from last run" data-type="${d}">Pic</a>&nbsp;`;
+                }
             }
             s += '</div>';
             $(this).append(s)
@@ -437,6 +441,24 @@ $(document).ready(function () {
 
     });
 
+    $('ul#browser_steps li .control .show-screenshot').click(function (element) {
+        var step_n = $(event.currentTarget).data('step-index');
+        w = window.open(this.href, "_blank", "width=640,height=480");
+        const t = $(event.currentTarget).data('type');
+
+        const url = browser_steps_fetch_screenshot_image_url + `&step_n=${step_n}&type=${t}`;
+        w.document.body.innerHTML = `<!DOCTYPE html>
+            <html lang="en">
+                <body>
+                    <img src="${url}" style="width: 100%" alt="Browser Step at step ${step_n} from last run." title="Browser Step at step ${step_n} from last run."/>
+                </body>
+        </html>`;
+        w.document.title = `Browser Step at step ${step_n} from last run.`;
+    });
+
+    if (browser_steps_last_error_step) {
+        $("ul#browser_steps>li:nth-child("+browser_steps_last_error_step+")").addClass("browser-step-with-error");
+    }
 
     $("ul#browser_steps select").change(function () {
         set_greyed_state();

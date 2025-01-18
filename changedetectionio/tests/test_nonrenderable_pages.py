@@ -1,11 +1,8 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 
-import time
 from flask import url_for
-from urllib.request import urlopen
-from .util import set_original_response, set_modified_response, live_server_setup
-
-sleep_time_for_fetch_thread = 3
+from .util import set_original_response, set_modified_response, live_server_setup, wait_for_all_checks
+import time
 
 
 def set_nonrenderable_response():
@@ -16,13 +13,19 @@ def set_nonrenderable_response():
      </body>
      </html>
     """
-
     with open("test-datastore/endpoint-content.txt", "w") as f:
         f.write(test_return_data)
+    time.sleep(1)
 
     return None
 
-def test_check_basic_change_detection_functionality(client, live_server):
+def set_zero_byte_response():
+    with open("test-datastore/endpoint-content.txt", "w") as f:
+        f.write("")
+    time.sleep(1)
+    return None
+
+def test_check_basic_change_detection_functionality(client, live_server, measure_memory_usage):
     set_original_response()
     live_server_setup(live_server)
 
@@ -35,24 +38,17 @@ def test_check_basic_change_detection_functionality(client, live_server):
 
     assert b"1 Imported" in res.data
 
-    time.sleep(sleep_time_for_fetch_thread)
+    wait_for_all_checks(client)
 
-    # Do this a few times.. ensures we dont accidently set the status
-    for n in range(3):
-        client.get(url_for("form_watch_checknow"), follow_redirects=True)
-
-        # Give the thread time to pick it up
-        time.sleep(sleep_time_for_fetch_thread)
-
-        # It should report nothing found (no new 'unviewed' class)
-        res = client.get(url_for("index"))
-        assert b'unviewed' not in res.data
+    # It should report nothing found (no new 'unviewed' class)
+    res = client.get(url_for("index"))
+    assert b'unviewed' not in res.data
 
 
     #####################
     client.post(
         url_for("settings_page"),
-        data={"application-empty_pages_are_a_change": "",
+        data={"application-empty_pages_are_a_change": "", # default, OFF, they are NOT a change
               "requests-time_between_check-minutes": 180,
               'application-fetch_backend': "html_requests"},
         follow_redirects=True
@@ -64,11 +60,19 @@ def test_check_basic_change_detection_functionality(client, live_server):
     client.get(url_for("form_watch_checknow"), follow_redirects=True)
 
     # Give the thread time to pick it up
-    time.sleep(sleep_time_for_fetch_thread)
+    wait_for_all_checks(client)
 
     # It should report nothing found (no new 'unviewed' class)
     res = client.get(url_for("index"))
     assert b'unviewed' not in res.data
+
+    uuid = next(iter(live_server.app.config['DATASTORE'].data['watching']))
+    watch = live_server.app.config['DATASTORE'].data['watching'][uuid]
+
+    assert watch.last_changed == 0
+    assert watch['last_checked'] != 0
+
+
 
 
     # ok now do the opposite
@@ -86,14 +90,24 @@ def test_check_basic_change_detection_functionality(client, live_server):
     client.get(url_for("form_watch_checknow"), follow_redirects=True)
 
     # Give the thread time to pick it up
-    time.sleep(sleep_time_for_fetch_thread)
+    wait_for_all_checks(client)
 
     # It should report nothing found (no new 'unviewed' class)
     res = client.get(url_for("index"))
     assert b'unviewed' in res.data
+    client.get(url_for("mark_all_viewed"), follow_redirects=True)
 
+    # A totally zero byte (#2528) response should also not trigger an error
+    set_zero_byte_response()
+    client.get(url_for("form_watch_checknow"), follow_redirects=True)
 
+    # 2877
+    assert watch.last_changed == watch['last_checked']
 
+    wait_for_all_checks(client)
+    res = client.get(url_for("index"))
+    assert b'unviewed' in res.data # A change should have registered because empty_pages_are_a_change is ON
+    assert b'fetch-error' not in res.data
 
     #
     # Cleanup everything

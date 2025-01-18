@@ -4,29 +4,21 @@
 # Why?
 # `browsersteps_playwright_browser_interface.chromium.connect_over_cdp()` will only run once without async()
 # - this flask app is not async()
-# - browserless has a single timeout/keepalive which applies to the session made at .connect_over_cdp()
+# - A single timeout/keepalive which applies to the session made at .connect_over_cdp()
 #
 # So it means that we must unfortunately for now just keep a single timer since .connect_over_cdp() was run
 # and know when that reaches timeout/keepalive :( when that time is up, restart the connection and tell the user
 # that their time is up, insert another coin. (reload)
 #
-# Bigger picture
-# - It's horrible that we have this click+wait deal, some nice socket.io solution using something similar
-# to what the browserless debug UI already gives us would be smarter..
 #
-# OR
-# - Some API call that should be hacked into browserless or playwright that we can "/api/bump-keepalive/{session_id}/60"
-# So we can tell it that we need more time (run this on each action)
-#
-# OR
-# - use multiprocessing to bump this over to its own process and add some transport layer (queue/pipes)
 
-from distutils.util import strtobool
+from changedetectionio.strtobool import strtobool
 from flask import Blueprint, request, make_response
 import os
-import logging
+
 from changedetectionio.store import ChangeDetectionStore
-from changedetectionio import login_optionally_required
+from changedetectionio.flask_app import login_optionally_required
+from loguru import logger
 
 browsersteps_sessions = {}
 io_interface_context = None
@@ -44,7 +36,7 @@ def construct_blueprint(datastore: ChangeDetectionStore):
 
 
         # We keep the playwright session open for many minutes
-        seconds_keepalive = int(os.getenv('BROWSERSTEPS_MINUTES_KEEPALIVE', 10)) * 60
+        keepalive_seconds = int(os.getenv('BROWSERSTEPS_MINUTES_KEEPALIVE', 10)) * 60
 
         browsersteps_start_session = {'start_time': time.time()}
 
@@ -56,16 +48,18 @@ def construct_blueprint(datastore: ChangeDetectionStore):
             # Start the Playwright context, which is actually a nodejs sub-process and communicates over STDIN/STDOUT pipes
             io_interface_context = io_interface_context.start()
 
+        keepalive_ms = ((keepalive_seconds + 3) * 1000)
+        base_url = os.getenv('PLAYWRIGHT_DRIVER_URL', '').strip('"')
+        a = "?" if not '?' in base_url else '&'
+        base_url += a + f"timeout={keepalive_ms}"
 
-        # keep it alive for 10 seconds more than we advertise, sometimes it helps to keep it shutting down cleanly
-        keepalive = "&timeout={}".format(((seconds_keepalive + 3) * 1000))
         try:
-            browsersteps_start_session['browser'] = io_interface_context.chromium.connect_over_cdp(
-                os.getenv('PLAYWRIGHT_DRIVER_URL', '') + keepalive)
+            browsersteps_start_session['browser'] = io_interface_context.chromium.connect_over_cdp(base_url)
         except Exception as e:
             if 'ECONNREFUSED' in str(e):
                 return make_response('Unable to start the Playwright Browser session, is it running?', 401)
             else:
+                # Other errors, bad URL syntax, bad reply etc
                 return make_response(str(e), 401)
 
         proxy_id = datastore.get_preferred_proxy_for_watch(uuid=watch_uuid)
@@ -85,12 +79,15 @@ def construct_blueprint(datastore: ChangeDetectionStore):
                 if parsed.password:
                     proxy['password'] = parsed.password
 
-                print("Browser Steps: UUID {} selected proxy {}".format(watch_uuid, proxy_url))
+                logger.debug(f"Browser Steps: UUID {watch_uuid} selected proxy {proxy_url}")
 
         # Tell Playwright to connect to Chrome and setup a new session via our stepper interface
         browsersteps_start_session['browserstepper'] = browser_steps.browsersteps_live_ui(
             playwright_browser=browsersteps_start_session['browser'],
-            proxy=proxy)
+            proxy=proxy,
+            start_url=datastore.data['watching'][watch_uuid].get('url'),
+            headers=datastore.data['watching'][watch_uuid].get('headers')
+        )
 
         # For test
         #browsersteps_start_session['browserstepper'].action_goto_url(value="http://example.com?time="+str(time.time()))
@@ -112,18 +109,43 @@ def construct_blueprint(datastore: ChangeDetectionStore):
         if not watch_uuid:
             return make_response('No Watch UUID specified', 500)
 
-        print("Starting connection with playwright")
-        logging.debug("browser_steps.py connecting")
+        logger.debug("Starting connection with playwright")
+        logger.debug("browser_steps.py connecting")
         browsersteps_sessions[browsersteps_session_id] = start_browsersteps_session(watch_uuid)
-        print("Starting connection with playwright - done")
+        logger.debug("Starting connection with playwright - done")
         return {'browsersteps_session_id': browsersteps_session_id}
+
+    @login_optionally_required
+    @browser_steps_blueprint.route("/browsersteps_image", methods=['GET'])
+    def browser_steps_fetch_screenshot_image():
+        from flask import (
+            make_response,
+            request,
+            send_from_directory,
+        )
+        uuid = request.args.get('uuid')
+        step_n = int(request.args.get('step_n'))
+
+        watch = datastore.data['watching'].get(uuid)
+        filename = f"step_before-{step_n}.jpeg" if request.args.get('type', '') == 'before' else f"step_{step_n}.jpeg"
+
+        if step_n and watch and os.path.isfile(os.path.join(watch.watch_data_dir, filename)):
+            response = make_response(send_from_directory(directory=watch.watch_data_dir, path=filename))
+            response.headers['Content-type'] = 'image/jpeg'
+            response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+            response.headers['Pragma'] = 'no-cache'
+            response.headers['Expires'] = 0
+            return response
+
+        else:
+            return make_response('Unable to fetch image, is the URL correct? does the watch exist? does the step_type-n.jpeg exist?', 401)
 
     # A request for an action was received
     @login_optionally_required
     @browser_steps_blueprint.route("/browsersteps_update", methods=['POST'])
     def browsersteps_ui_update():
         import base64
-        import playwright._impl._api_types
+        import playwright._impl._errors
         global browsersteps_sessions
         from changedetectionio.blueprint.browser_steps import browser_steps
 
@@ -148,11 +170,6 @@ def construct_blueprint(datastore: ChangeDetectionStore):
             step_n = int(request.form.get('step_n'))
             is_last_step = strtobool(request.form.get('is_last_step'))
 
-            if step_operation == 'Goto site':
-                step_operation = 'goto_url'
-                step_optional_value = datastore.data['watching'][uuid].get('url')
-                step_selector = None
-
             # @todo try.. accept.. nice errors not popups..
             try:
 
@@ -161,7 +178,7 @@ def construct_blueprint(datastore: ChangeDetectionStore):
                                          optional_value=step_optional_value)
 
             except Exception as e:
-                print("Exception when calling step operation", step_operation, str(e))
+                logger.error(f"Exception when calling step operation {step_operation} {str(e)}")
                 # Try to find something of value to give back to the user
                 return make_response(str(e).splitlines()[0], 401)
 
@@ -171,8 +188,10 @@ def construct_blueprint(datastore: ChangeDetectionStore):
             u = browsersteps_sessions[browsersteps_session_id]['browserstepper'].page.url
             if is_last_step and u:
                 (screenshot, xpath_data) = browsersteps_sessions[browsersteps_session_id]['browserstepper'].request_visualselector_data()
-                datastore.save_screenshot(watch_uuid=uuid, screenshot=screenshot)
-                datastore.save_xpath_data(watch_uuid=uuid, data=xpath_data)
+                watch = datastore.data['watching'].get(uuid)
+                if watch:
+                    watch.save_screenshot(screenshot=screenshot)
+                    watch.save_xpath_data(data=xpath_data)
 
 #        if not this_session.page:
 #            cleanup_playwright_session()

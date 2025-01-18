@@ -1,27 +1,24 @@
 {% extends 'base.html' %}
 {% block content %}
-{% from '_helpers.jinja' import render_simple_field, render_field %}
+{% from '_helpers.html' import render_simple_field, render_field, render_nolabel_field, sort_by_title %}
 <script src="{{url_for('static_content', group='js', filename='jquery-3.6.0.min.js')}}"></script>
 <script src="{{url_for('static_content', group='js', filename='watch-overview.js')}}" defer></script>
 
 <div class="box">
 
-    <form class="pure-form" action="{{ url_for('form_quick_watch_add') }}" method="POST" id="new-watch-form">
+    <form class="pure-form" action="{{ url_for('form_quick_watch_add', tag=active_tag_uuid) }}" method="POST" id="new-watch-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" >
         <fieldset>
             <legend>Add a new change detection watch</legend>
             <div id="watch-add-wrapper-zone">
-                <div>
-                    {{ render_simple_field(form.url, placeholder="https://...", required=true) }}
-                    {{ render_simple_field(form.tags, value=tags[active_tag].title if active_tag else '', placeholder="watch label / tag") }}
-                </div>
-                <div>
-                    {{ render_simple_field(form.watch_submit_button, title="Watch this URL!" ) }}
-                    {{ render_simple_field(form.edit_and_watch_submit_button, title="Edit first then Watch") }}
-                </div>
+
+                    {{ render_nolabel_field(form.url, placeholder="https://...", required=true) }}
+                    {{ render_nolabel_field(form.tags, value=active_tag.title if active_tag_uuid else '', placeholder="watch label / tag") }}
+                    {{ render_nolabel_field(form.watch_submit_button, title="Watch this URL!" ) }}
+                    {{ render_nolabel_field(form.edit_and_watch_submit_button, title="Edit first then Watch") }}
             </div>
             <div id="quick-watch-processor-type">
-                {{ render_simple_field(form.processor, title="Edit first then Watch") }}
+                {{ render_simple_field(form.processor) }}
             </div>
 
         </fieldset>
@@ -40,6 +37,7 @@
         <button class="pure-button button-secondary button-xsmall" name="op" value="assign-tag" id="checkbox-assign-tag">Tag</button>
         <button class="pure-button button-secondary button-xsmall" name="op" value="mark-viewed">Mark viewed</button>
         <button class="pure-button button-secondary button-xsmall" name="op" value="notification-default">Use default notification</button>
+        <button class="pure-button button-secondary button-xsmall" name="op" value="clear-errors">Clear errors</button>
         <button class="pure-button button-secondary button-xsmall" style="background: #dd4242;" name="op" value="clear-history">Clear/reset history</button>
         <button class="pure-button button-secondary button-xsmall" style="background: #dd4242;" name="op" value="delete">Delete</button>
     </div>
@@ -48,17 +46,24 @@
     {% endif %}
     {% if search_q %}<div id="search-result-info">Searching "<strong><i>{{search_q}}</i></strong>"</div>{% endif %}
     <div>
-        <a href="{{url_for('index')}}" class="pure-button button-tag {{'active' if not active_tag }}">All</a>
-        {% for uuid, tag in tags.items() %}
-            {% if tag != "" %}
-                <a href="{{url_for('index', tag=uuid) }}" class="pure-button button-tag {{'active' if active_tag == uuid }}">{{ tag.title }}</a>
-            {% endif %}
-        {% endfor %}
+        <a href="{{url_for('index')}}" class="pure-button button-tag {{'active' if not active_tag_uuid }}">All</a>
+
+    <!-- tag list -->
+    {% for uuid, tag in tags %}
+        {% if tag != "" %}
+            <a href="{{url_for('index', tag=uuid) }}" class="pure-button button-tag {{'active' if active_tag_uuid == uuid }}">{{ tag.title }}</a>
+        {% endif %}
+    {% endfor %}
     </div>
 
     {% set sort_order = sort_order or 'asc' %}
     {% set sort_attribute = sort_attribute or 'last_changed'  %}
     {% set pagination_page = request.args.get('page', 0) %}
+    {% set cols_required = 6 %}
+    {% set any_has_restock_price_processor = datastore.any_watches_have_processor_by_name("restock_diff") %}
+    {% if any_has_restock_price_processor %}
+        {% set cols_required = cols_required + 1 %}
+    {% endif %}
 
     <div id="watch-table-wrapper">
 
@@ -67,36 +72,43 @@
             <tr>
                 {% set link_order = "desc" if sort_order  == 'asc' else "asc" %}
                 {% set arrow_span = "" %}
-                <th><input style="vertical-align: middle" type="checkbox" id="check-all" > <a class="{{ 'active '+link_order if sort_attribute == 'date_created' else 'inactive' }}"  href="{{url_for('index', sort='date_created', order=link_order, tag=active_tag)}}"># <span class='arrow {{link_order}}'></span></a></th>
-                <th></th>
-                <th><a class="{{ 'active '+link_order if sort_attribute == 'label' else 'inactive' }}" href="{{url_for('index', sort='label', order=link_order, tag=active_tag)}}">Website <span class='arrow {{link_order}}'></span></a></th>
-                <th><a class="{{ 'active '+link_order if sort_attribute == 'last_checked' else 'inactive' }}" href="{{url_for('index', sort='last_checked', order=link_order, tag=active_tag)}}">Last Checked <span class='arrow {{link_order}}'></span></a></th>
-                <th><a class="{{ 'active '+link_order if sort_attribute == 'last_changed' else 'inactive' }}" href="{{url_for('index', sort='last_changed', order=link_order, tag=active_tag)}}">Last Changed <span class='arrow {{link_order}}'></span></a></th>
-                <th></th>
+                <th><input style="vertical-align: middle" type="checkbox" id="check-all" > <a class="{{ 'active '+link_order if sort_attribute == 'date_created' else 'inactive' }}"  href="{{url_for('index', sort='date_created', order=link_order, tag=active_tag_uuid)}}"># <span class='arrow {{link_order}}'></span></a></th>
+                <th class="empty-cell"></th>
+                <th><a class="{{ 'active '+link_order if sort_attribute == 'label' else 'inactive' }}" href="{{url_for('index', sort='label', order=link_order, tag=active_tag_uuid)}}">Website <span class='arrow {{link_order}}'></span></a></th>
+             {% if any_has_restock_price_processor %}
+                <th>Restock &amp; Price</th>
+             {% endif %}
+                <th><a class="{{ 'active '+link_order if sort_attribute == 'last_checked' else 'inactive' }}" href="{{url_for('index', sort='last_checked', order=link_order, tag=active_tag_uuid)}}"><span class="hide-on-mobile">Last</span> Checked <span class='arrow {{link_order}}'></span></a></th>
+                <th><a class="{{ 'active '+link_order if sort_attribute == 'last_changed' else 'inactive' }}" href="{{url_for('index', sort='last_changed', order=link_order, tag=active_tag_uuid)}}"><span class="hide-on-mobile">Last</span> Changed <span class='arrow {{link_order}}'></span></a></th>
+                <th class="empty-cell"></th>
             </tr>
             </thead>
             <tbody>
             {% if not watches|length %}
             <tr>
-                <td colspan="6">No website watches configured, please add a URL in the box above, or <a href="{{ url_for('import_page')}}" >import a list</a>.</td>
+                <td colspan="{{ cols_required }}" style="text-wrap: wrap;">No website watches configured, please add a URL in the box above, or <a href="{{ url_for('import_page')}}" >import a list</a>.</td>
             </tr>
             {% endif %}
             {% for watch in (watches|sort(attribute=sort_attribute, reverse=sort_order == 'asc'))|pagination_slice(skip=pagination.skip) %}
+
+                {% set is_unviewed =  watch.newest_history_key| int > watch.last_viewed and watch.history_n>=2 %}
+
             <tr id="{{ watch.uuid }}"
                 class="{{ loop.cycle('pure-table-odd', 'pure-table-even') }} processor-{{ watch['processor'] }}
                 {% if watch.last_error is defined and watch.last_error != False %}error{% endif %}
                 {% if watch.last_notification_error is defined and watch.last_notification_error != False %}error{% endif %}
                 {% if watch.paused is defined and watch.paused != False %}paused{% endif %}
-                {% if watch.newest_history_key| int > watch.last_viewed and watch.history_n>=2 %}unviewed{% endif %}
+                {% if is_unviewed %}unviewed{% endif %}
+                {% if watch.has_restock_info %} has-restock-info {% if watch['restock']['in_stock'] %}in-stock{% else %}not-in-stock{% endif %} {% else %}no-restock-info{% endif %}
                 {% if watch.uuid in queued_uuids %}queued{% endif %}">
                 <td class="inline checkbox-uuid" ><input name="uuids"  type="checkbox" value="{{ watch.uuid}} " > <span>{{ loop.index+pagination.skip }}</span></td>
                 <td class="inline watch-controls">
                     {% if not watch.paused %}
-                    <a class="state-off" href="{{url_for('index', op='pause', uuid=watch.uuid, tag=active_tag)}}"><img src="{{url_for('static_content', group='images', filename='pause.svg')}}" alt="Pause checks" title="Pause checks" class="icon icon-pause" ></a>
+                    <a class="state-off" href="{{url_for('index', op='pause', uuid=watch.uuid, tag=active_tag_uuid)}}"><img src="{{url_for('static_content', group='images', filename='pause.svg')}}" alt="Pause checks" title="Pause checks" class="icon icon-pause" ></a>
                     {% else %}
-                    <a class="state-on" href="{{url_for('index', op='pause', uuid=watch.uuid, tag=active_tag)}}"><img src="{{url_for('static_content', group='images', filename='play.svg')}}" alt="UnPause checks" title="UnPause checks" class="icon icon-unpause" ></a>
+                    <a class="state-on" href="{{url_for('index', op='pause', uuid=watch.uuid, tag=active_tag_uuid)}}"><img src="{{url_for('static_content', group='images', filename='play.svg')}}" alt="UnPause checks" title="UnPause checks" class="icon icon-unpause" ></a>
                     {% endif %}
-                    <a class="link-mute state-{{'on' if watch.notification_muted else 'off'}}" href="{{url_for('index', op='mute', uuid=watch.uuid, tag=active_tag)}}"><img src="{{url_for('static_content', group='images', filename='bell-off.svg')}}" alt="Mute notifications" title="Mute notifications" class="icon icon-mute" ></a>
+                    <a class="link-mute state-{{'on' if watch.notification_muted else 'off'}}" href="{{url_for('index', op='mute', uuid=watch.uuid, tag=active_tag_uuid)}}"><img src="{{url_for('static_content', group='images', filename='bell-off.svg')}}" alt="Mute notifications" title="Mute notifications" class="icon icon-mute" ></a>
                 </td>
                 <td class="title-col inline">{{watch.title if watch.title is not none and watch.title|length > 0 else watch.url}}
                     <a class="external" target="_blank" rel="noopener" href="{{ watch.link.replace('source:','') }}"></a>
@@ -104,11 +116,13 @@
 
                     {% if watch.get_fetch_backend == "html_webdriver"
                          or (  watch.get_fetch_backend == "system" and system_default_fetcher == 'html_webdriver'  )
+                         or "extra_browser_" in watch.get_fetch_backend
                     %}
-                    <img class="status-icon" src="{{url_for('static_content', group='images', filename='Google-Chrome-icon.png')}}" title="Using a chrome browser" >
+                    <img class="status-icon" src="{{url_for('static_content', group='images', filename='Google-Chrome-icon.png')}}" title="Using a Chrome browser" >
                     {% endif %}
 
                     {%if watch.is_pdf  %}<img class="status-icon" src="{{url_for('static_content', group='images', filename='pdf-icon.svg')}}" title="Converting PDF to text" >{% endif %}
+                    {% if watch.has_browser_steps %}<img class="status-icon status-browsersteps" src="{{url_for('static_content', group='images', filename='steps.svg')}}" title="Browser Steps is enabled" >{% endif %}
                     {% if watch.last_error is defined and watch.last_error != False %}
                     <div class="fetch-error">{{ watch.last_error }}
 
@@ -119,6 +133,9 @@
                             <a href="{{ url_for('settings_page', uuid=watch.uuid) }}#proxies">Try adding external proxies/locations</a>
                         
                         {% endif %}
+                        {% if 'empty result or contain only an image' in watch.last_error %}
+                            <a href="https://github.com/dgtlmoon/changedetection.io/wiki/Detecting-changes-in-images">more help here</a>.
+                        {% endif %}
                     </div>
                     {% endif %}
                     {% if watch.last_notification_error is defined and watch.last_notification_error != False %}
@@ -127,32 +144,41 @@
 
                     {% if watch['processor'] == 'text_json_diff'  %}
                         {% if watch['has_ldjson_price_data'] and not watch['track_ldjson_price_data']  %}
-                        <div class="ldjson-price-track-offer">Embedded price data detected, follow only price data? <a href="{{url_for('price_data_follower.accept', uuid=watch.uuid)}}" class="pure-button button-xsmall">Yes</a> <a href="{{url_for('price_data_follower.reject', uuid=watch.uuid)}}" class="">No</a></div>
+                        <div class="ldjson-price-track-offer">Switch to Restock & Price watch mode? <a href="{{url_for('price_data_follower.accept', uuid=watch.uuid)}}" class="pure-button button-xsmall">Yes</a> <a href="{{url_for('price_data_follower.reject', uuid=watch.uuid)}}" class="">No</a></div>
                         {% endif %}
-                        {% if watch['track_ldjson_price_data'] == 'accepted' %}
+                    {% endif %}
+                    {% if watch['processor'] == 'restock_diff' %}
                         <span class="tracking-ldjson-price-data" title="Automatically following embedded price information"><img src="{{url_for('static_content', group='images', filename='price-tag-icon.svg')}}"  class="status-icon price-follow-tag-icon" > Price</span>
-                        {% endif %}
                     {% endif %}
-
-                    {% if watch['processor'] == 'restock_diff'  %}
-                    <span class="restock-label {{'in-stock' if watch['in_stock'] else 'not-in-stock' }}" title="detecting restock conditions">
-                        <!-- maybe some object watch['processor'][restock_diff] or.. -->
-                        {% if watch['last_checked'] %}
-                            {% if watch['in_stock'] %} In stock {% else %} Not in stock {% endif %}
-                        {% else %}
-                            Not yet checked
-                        {% endif %}
-                    </span>
-                    {% endif %}
-
-
                     {% for watch_tag_uuid, watch_tag in datastore.get_all_tags_for_watch(watch['uuid']).items() %}
                       <span class="watch-tag-list">{{ watch_tag.title }}</span>
                     {% endfor %}
-
                 </td>
-                <td class="last-checked">{{watch|format_last_checked_time|safe}}</td>
-                <td class="last-changed">{% if watch.history_n >=2 and watch.last_changed >0 %}
+            <!-- @todo make it so any watch handler obj can expose this --->
+{% if any_has_restock_price_processor %}
+                <td class="restock-and-price">
+                    {% if watch['processor'] == 'restock_diff'  %}
+                        {% if watch.has_restock_info %}
+                            <span class="restock-label {{'in-stock' if watch['restock']['in_stock'] else 'not-in-stock' }}" title="Detecting restock and price">
+                                <!-- maybe some object watch['processor'][restock_diff] or.. -->
+                                 {% if watch['restock']['in_stock'] %} In stock {% else %} Not in stock {% endif %}
+                            </span>
+                        {% endif %}
+
+                        {% if watch.get('restock') and watch['restock']['price'] != None %}
+                            {% if watch['restock']['price'] != None %}
+                                <span class="restock-label price" title="Price">
+                                {{ watch['restock']['price']|format_number_locale }} {{ watch['restock']['currency'] }}
+                                </span>
+                            {% endif %}
+                        {% elif not watch.has_restock_info %}
+                            <span class="restock-label error">No information</span>
+                        {% endif %}
+                    {% endif %}
+                </td>
+{% endif %}
+                <td class="last-checked" data-timestamp="{{ watch.last_checked }}">{{watch|format_last_checked_time|safe}}</td>
+                <td class="last-changed" data-timestamp="{{ watch.last_changed }}">{% if watch.history_n >=2 and watch.last_changed >0 %}
                     {{watch.last_changed|format_timestamp_timeago}}
                     {% else %}
                     Not yet
@@ -161,9 +187,15 @@
                 <td>
                     <a {% if watch.uuid in queued_uuids %}disabled="true"{% endif %} href="{{ url_for('form_watch_checknow', uuid=watch.uuid, tag=request.args.get('tag')) }}"
                        class="recheck pure-button pure-button-primary">{% if watch.uuid in queued_uuids %}Queued{% else %}Recheck{% endif %}</a>
-                    <a href="{{ url_for('edit_page', uuid=watch.uuid)}}" class="pure-button pure-button-primary">Edit</a>
+                    <a href="{{ url_for('edit_page', uuid=watch.uuid, tag=active_tag_uuid)}}#general" class="pure-button pure-button-primary">Edit</a>
                     {% if watch.history_n >= 2 %}
-                    <a href="{{ url_for('diff_history_page', uuid=watch.uuid) }}" target="{{watch.uuid}}" class="pure-button pure-button-primary diff-link">Diff</a>
+
+                        {%  if is_unviewed %}
+                           <a href="{{ url_for('diff_history_page', uuid=watch.uuid, from_version=watch.get_from_version_based_on_last_viewed) }}" target="{{watch.uuid}}" class="pure-button pure-button-primary diff-link">History</a>
+                        {% else %}
+                           <a href="{{ url_for('diff_history_page', uuid=watch.uuid)}}" target="{{watch.uuid}}" class="pure-button pure-button-primary diff-link">History</a>
+                        {% endif %}
+
                     {% else %}
                         {% if watch.history_n == 1 or (watch.history_n ==0 and watch.error_text_ctime )%}
                             <a href="{{ url_for('preview_page', uuid=watch.uuid)}}" target="{{watch.uuid}}" class="pure-button pure-button-primary">Preview</a>
@@ -175,17 +207,22 @@
             </tbody>
         </table>
         <ul id="post-list-buttons">
+            {% if errored_count %}
+            <li>
+                <a href="{{url_for('index', with_errors=1, tag=request.args.get('tag')) }}" class="pure-button button-tag button-error ">With errors ({{ errored_count }})</a>
+            </li>
+            {% endif %}
             {% if has_unviewed %}
             <li>
-                <a href="{{url_for('mark_all_viewed', tag=request.args.get('tag')) }}" class="pure-button button-tag ">Mark all viewed</a>
+                <a href="{{url_for('mark_all_viewed',with_errors=request.args.get('with_errors',0)) }}" class="pure-button button-tag ">Mark all viewed</a>
             </li>
             {% endif %}
             <li>
-               <a href="{{ url_for('form_watch_checknow', tag=active_tag) }}" class="pure-button button-tag ">Recheck
-                all {% if active_tag%} in "{{tags[active_tag].title}}"{%endif%}</a>
+               <a href="{{ url_for('form_watch_checknow', tag=active_tag_uuid, with_errors=request.args.get('with_errors',0)) }}" class="pure-button button-tag ">Recheck
+                all {% if active_tag_uuid %} in "{{active_tag.title}}"{%endif%}</a>
             </li>
             <li>
-                <a href="{{ url_for('rss', tag=active_tag , token=app_rss_token)}}"><img alt="RSS Feed" id="feed-icon" src="{{url_for('static_content', group='images', filename='Generic_Feed-icon.svg')}}" height="15"></a>
+                <a href="{{ url_for('rss', tag=active_tag_uuid, token=app_rss_token)}}"><img alt="RSS Feed" id="feed-icon" src="{{url_for('static_content', group='images', filename='Generic_Feed-icon.svg')}}" height="15"></a>
             </li>
         </ul>
         {{ pagination.links }}

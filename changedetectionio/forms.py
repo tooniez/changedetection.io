@@ -1,9 +1,14 @@
 import os
 import re
+from loguru import logger
+from wtforms.widgets.core import TimeInput
+
+from changedetectionio.strtobool import strtobool
 
 from wtforms import (
     BooleanField,
     Form,
+    Field,
     IntegerField,
     RadioField,
     SelectField,
@@ -14,14 +19,20 @@ from wtforms import (
     validators,
     widgets
 )
+from flask_wtf.file import FileField, FileAllowed
 from wtforms.fields import FieldList
+
 from wtforms.validators import ValidationError
+
+from validators.url import url as url_validator
+
 
 # default
 # each select <option data-enabled="enabled-0-0"
 from changedetectionio.blueprint.browser_steps.browser_steps import browser_step_ui_config
 
-from changedetectionio import content_fetcher
+from changedetectionio import html_tools, content_fetchers
+
 from changedetectionio.notification import (
     valid_notification_formats,
 )
@@ -36,10 +47,11 @@ valid_method = {
     'PUT',
     'PATCH',
     'DELETE',
+    'OPTIONS',
 }
 
 default_method = 'GET'
-
+allow_simplehost = not strtobool(os.getenv('BLOCK_SIMPLEHOSTS', 'False'))
 
 class StringListField(StringField):
     widget = widgets.TextArea()
@@ -115,6 +127,87 @@ class StringTagUUID(StringField):
 
         return 'error'
 
+class TimeDurationForm(Form):
+    hours = SelectField(choices=[(f"{i}", f"{i}") for i in range(0, 25)], default="24",  validators=[validators.Optional()])
+    minutes = SelectField(choices=[(f"{i}", f"{i}") for i in range(0, 60)], default="00", validators=[validators.Optional()])
+
+class TimeStringField(Field):
+    """
+    A WTForms field for time inputs (HH:MM) that stores the value as a string.
+    """
+    widget = TimeInput()  # Use the built-in time input widget
+
+    def _value(self):
+        """
+        Returns the value for rendering in the form.
+        """
+        return self.data if self.data is not None else ""
+
+    def process_formdata(self, valuelist):
+        """
+        Processes the raw input from the form and stores it as a string.
+        """
+        if valuelist:
+            time_str = valuelist[0]
+            # Simple validation for HH:MM format
+            if not time_str or len(time_str.split(":")) != 2:
+                raise ValidationError("Invalid time format. Use HH:MM.")
+            self.data = time_str
+
+
+class validateTimeZoneName(object):
+    """
+       Flask wtform validators wont work with basic auth
+    """
+
+    def __init__(self, message=None):
+        self.message = message
+
+    def __call__(self, form, field):
+        from zoneinfo import available_timezones
+        python_timezones = available_timezones()
+        if field.data and field.data not in python_timezones:
+            raise ValidationError("Not a valid timezone name")
+
+class ScheduleLimitDaySubForm(Form):
+    enabled = BooleanField("not set", default=True)
+    start_time = TimeStringField("Start At", default="00:00", render_kw={"placeholder": "HH:MM"}, validators=[validators.Optional()])
+    duration = FormField(TimeDurationForm, label="Run duration")
+
+class ScheduleLimitForm(Form):
+    enabled = BooleanField("Use time scheduler", default=False)
+    # Because the label for=""" doesnt line up/work with the actual checkbox
+    monday = FormField(ScheduleLimitDaySubForm, label="")
+    tuesday = FormField(ScheduleLimitDaySubForm, label="")
+    wednesday = FormField(ScheduleLimitDaySubForm, label="")
+    thursday = FormField(ScheduleLimitDaySubForm, label="")
+    friday = FormField(ScheduleLimitDaySubForm, label="")
+    saturday = FormField(ScheduleLimitDaySubForm, label="")
+    sunday = FormField(ScheduleLimitDaySubForm, label="")
+
+    timezone = StringField("Optional timezone to run in",
+                                  render_kw={"list": "timezones"},
+                                  validators=[validateTimeZoneName()]
+                                  )
+    def __init__(
+        self,
+        formdata=None,
+        obj=None,
+        prefix="",
+        data=None,
+        meta=None,
+        **kwargs,
+    ):
+        super().__init__(formdata, obj, prefix, data, meta, **kwargs)
+        self.monday.form.enabled.label.text="Monday"
+        self.tuesday.form.enabled.label.text = "Tuesday"
+        self.wednesday.form.enabled.label.text = "Wednesday"
+        self.thursday.form.enabled.label.text = "Thursday"
+        self.friday.form.enabled.label.text = "Friday"
+        self.saturday.form.enabled.label.text = "Saturday"
+        self.sunday.form.enabled.label.text = "Sunday"
+
+
 class TimeBetweenCheckForm(Form):
     weeks = IntegerField('Weeks', validators=[validators.Optional(), validators.NumberRange(min=0, message="Should contain zero or more seconds")])
     days = IntegerField('Days', validators=[validators.Optional(), validators.NumberRange(min=0, message="Should contain zero or more seconds")])
@@ -159,31 +252,31 @@ class ValidateContentFetcherIsReady(object):
         self.message = message
 
     def __call__(self, form, field):
-        import urllib3.exceptions
-        from changedetectionio import content_fetcher
+        return
 
+# AttributeError: module 'changedetectionio.content_fetcher' has no attribute 'extra_browser_unlocked<>ASDF213r123r'
         # Better would be a radiohandler that keeps a reference to each class
-        if field.data is not None and field.data != 'system':
-            klass = getattr(content_fetcher, field.data)
-            some_object = klass()
-            try:
-                ready = some_object.is_ready()
-
-            except urllib3.exceptions.MaxRetryError as e:
-                driver_url = some_object.command_executor
-                message = field.gettext('Content fetcher \'%s\' did not respond.' % (field.data))
-                message += '<br>' + field.gettext(
-                    'Be sure that the selenium/webdriver runner is running and accessible via network from this container/host.')
-                message += '<br>' + field.gettext('Did you follow the instructions in the wiki?')
-                message += '<br><br>' + field.gettext('WebDriver Host: %s' % (driver_url))
-                message += '<br><a href="https://github.com/dgtlmoon/changedetection.io/wiki/Fetching-pages-with-WebDriver">Go here for more information</a>'
-                message += '<br>'+field.gettext('Content fetcher did not respond properly, unable to use it.\n %s' % (str(e)))
-
-                raise ValidationError(message)
-
-            except Exception as e:
-                message = field.gettext('Content fetcher \'%s\' did not respond properly, unable to use it.\n %s')
-                raise ValidationError(message % (field.data, e))
+        # if field.data is not None and field.data != 'system':
+        #     klass = getattr(content_fetcher, field.data)
+        #     some_object = klass()
+        #     try:
+        #         ready = some_object.is_ready()
+        #
+        #     except urllib3.exceptions.MaxRetryError as e:
+        #         driver_url = some_object.command_executor
+        #         message = field.gettext('Content fetcher \'%s\' did not respond.' % (field.data))
+        #         message += '<br>' + field.gettext(
+        #             'Be sure that the selenium/webdriver runner is running and accessible via network from this container/host.')
+        #         message += '<br>' + field.gettext('Did you follow the instructions in the wiki?')
+        #         message += '<br><br>' + field.gettext('WebDriver Host: %s' % (driver_url))
+        #         message += '<br><a href="https://github.com/dgtlmoon/changedetection.io/wiki/Fetching-pages-with-WebDriver">Go here for more information</a>'
+        #         message += '<br>'+field.gettext('Content fetcher did not respond properly, unable to use it.\n %s' % (str(e)))
+        #
+        #         raise ValidationError(message)
+        #
+        #     except Exception as e:
+        #         message = field.gettext('Content fetcher \'%s\' did not respond properly, unable to use it.\n %s')
+        #         raise ValidationError(message % (field.data, e))
 
 
 class ValidateNotificationBodyAndTitleWhenURLisSet(object):
@@ -212,34 +305,48 @@ class ValidateAppRiseServers(object):
     def __call__(self, form, field):
         import apprise
         apobj = apprise.Apprise()
-
+        # so that the custom endpoints are registered
+        from changedetectionio.apprise_plugin import apprise_custom_api_call_wrapper
         for server_url in field.data:
-            if not apobj.add(server_url):
-                message = field.gettext('\'%s\' is not a valid AppRise URL.' % (server_url))
+            url = server_url.strip()
+            if url.startswith("#"):
+                continue
+
+            if not apobj.add(url):
+                message = field.gettext('\'%s\' is not a valid AppRise URL.' % (url))
                 raise ValidationError(message)
 
 class ValidateJinja2Template(object):
     """
     Validates that a {token} is from a valid set
     """
-    def __init__(self, message=None):
-        self.message = message
-
     def __call__(self, form, field):
         from changedetectionio import notification
 
-        from jinja2 import Environment, BaseLoader, TemplateSyntaxError
+        from jinja2 import BaseLoader, TemplateSyntaxError, UndefinedError
+        from jinja2.sandbox import ImmutableSandboxedEnvironment
         from jinja2.meta import find_undeclared_variables
+        import jinja2.exceptions
 
+        # Might be a list of text, or might be just text (like from the apprise url list)
+        joined_data = ' '.join(map(str, field.data)) if isinstance(field.data, list) else f"{field.data}"
 
         try:
-            jinja2_env = Environment(loader=BaseLoader)
+            jinja2_env = ImmutableSandboxedEnvironment(loader=BaseLoader)
             jinja2_env.globals.update(notification.valid_tokens)
-            rendered = jinja2_env.from_string(field.data).render()
+            # Extra validation tokens provided on the form_class(... extra_tokens={}) setup
+            if hasattr(field, 'extra_notification_tokens'):
+                jinja2_env.globals.update(field.extra_notification_tokens)
+
+            jinja2_env.from_string(joined_data).render()
         except TemplateSyntaxError as e:
             raise ValidationError(f"This is not a valid Jinja2 template: {e}") from e
+        except UndefinedError as e:
+            raise ValidationError(f"A variable or function is not defined: {e}") from e
+        except jinja2.exceptions.SecurityError as e:
+            raise ValidationError(f"This is not a valid Jinja2 template: {e}") from e
 
-        ast = jinja2_env.parse(field.data)
+        ast = jinja2_env.parse(joined_data)
         undefined = ", ".join(find_undeclared_variables(ast))
         if undefined:
             raise ValidationError(
@@ -256,18 +363,24 @@ class validateURL(object):
         self.message = message
 
     def __call__(self, form, field):
-        import validators
+        # This should raise a ValidationError() or not
+        validate_url(field.data)
 
-        try:
-            validators.url(field.data.strip())
-        except validators.ValidationFailure:
-            message = field.gettext('\'%s\' is not a valid URL.' % (field.data.strip()))
-            raise ValidationError(message)
 
-        from .model.Watch import is_safe_url
-        if not is_safe_url(field.data):
-            raise ValidationError('Watch protocol is not permitted by SAFE_PROTOCOL_REGEX')
+def validate_url(test_url):
+    # If hosts that only contain alphanumerics are allowed ("localhost" for example)
+    try:
+        url_validator(test_url, simple_host=allow_simplehost)
+    except validators.ValidationError:
+        #@todo check for xss
+        message = f"'{test_url}' is not a valid URL."
+        # This should be wtforms.validators.
+        raise ValidationError(message)
 
+    from .model.Watch import is_safe_url
+    if not is_safe_url(test_url):
+        # This should be wtforms.validators.
+        raise ValidationError('Watch protocol is not permitted by SAFE_PROTOCOL_REGEX or incorrect URL format')
 
 class ValidateListRegex(object):
     """
@@ -279,11 +392,10 @@ class ValidateListRegex(object):
     def __call__(self, form, field):
 
         for line in field.data:
-            if line[0] == '/' and line[-1] == '/':
-                # Because internally we dont wrap in /
-                line = line.strip('/')
+            if re.search(html_tools.PERL_STYLE_REGEX, line, re.IGNORECASE):
                 try:
-                    re.compile(line)
+                    regex = html_tools.perl_style_slash_enclosed_regex_to_options(line)
+                    re.compile(regex)
                 except re.error:
                     message = field.gettext('RegEx \'%s\' is not a valid regular expression.')
                     raise ValidationError(message % (line))
@@ -312,11 +424,30 @@ class ValidateCSSJSONXPATHInput(object):
                 return
 
             # Does it look like XPath?
-            if line.strip()[0] == '/':
+            if line.strip()[0] == '/' or line.strip().startswith('xpath:'):
+                if not self.allow_xpath:
+                    raise ValidationError("XPath not permitted in this field!")
+                from lxml import etree, html
+                import elementpath
+                # xpath 2.0-3.1
+                from elementpath.xpath3 import XPath3Parser
+                tree = html.fromstring("<html></html>")
+                line = line.replace('xpath:', '')
+
+                try:
+                    elementpath.select(tree, line.strip(), parser=XPath3Parser)
+                except elementpath.ElementPathError as e:
+                    message = field.gettext('\'%s\' is not a valid XPath expression. (%s)')
+                    raise ValidationError(message % (line, str(e)))
+                except:
+                    raise ValidationError("A system-error occurred when validating your XPath expression")
+
+            if line.strip().startswith('xpath1:'):
                 if not self.allow_xpath:
                     raise ValidationError("XPath not permitted in this field!")
                 from lxml import etree, html
                 tree = html.fromstring("<html></html>")
+                line = re.sub(r'^xpath1:', '', line)
 
                 try:
                     tree.xpath(line.strip())
@@ -380,19 +511,31 @@ class quickWatchForm(Form):
 
 # Common to a single watch and the global settings
 class commonSettingsForm(Form):
+    from . import processors
 
-    notification_urls = StringListField('Notification URL List', validators=[validators.Optional(), ValidateAppRiseServers()])
-    notification_title = StringField('Notification Title', default='ChangeDetection.io Notification - {{ watch_url }}', validators=[validators.Optional(), ValidateJinja2Template()])
+    def __init__(self, formdata=None, obj=None, prefix="", data=None, meta=None, **kwargs):
+        super().__init__(formdata, obj, prefix, data, meta, **kwargs)
+        self.notification_body.extra_notification_tokens = kwargs.get('extra_notification_tokens', {})
+        self.notification_title.extra_notification_tokens = kwargs.get('extra_notification_tokens', {})
+        self.notification_urls.extra_notification_tokens = kwargs.get('extra_notification_tokens', {})
+
+    extract_title_as_title = BooleanField('Extract <title> from document and use as watch title', default=False)
+    fetch_backend = RadioField(u'Fetch Method', choices=content_fetchers.available_fetchers(), validators=[ValidateContentFetcherIsReady()])
     notification_body = TextAreaField('Notification Body', default='{{ watch_url }} had a change.', validators=[validators.Optional(), ValidateJinja2Template()])
     notification_format = SelectField('Notification format', choices=valid_notification_formats.keys())
-    fetch_backend = RadioField(u'Fetch Method', choices=content_fetcher.available_fetchers(), validators=[ValidateContentFetcherIsReady()])
-    extract_title_as_title = BooleanField('Extract <title> from document and use as watch title', default=False)
-    webdriver_delay = IntegerField('Wait seconds before extracting text', validators=[validators.Optional(), validators.NumberRange(min=1,
-                                                                                                                                    message="Should contain one or more seconds")])
+    notification_title = StringField('Notification Title', default='ChangeDetection.io Notification - {{ watch_url }}', validators=[validators.Optional(), ValidateJinja2Template()])
+    notification_urls = StringListField('Notification URL List', validators=[validators.Optional(), ValidateAppRiseServers(), ValidateJinja2Template()])
+    processor = RadioField( label=u"Processor - What do you want to achieve?", choices=processors.available_processors(), default="text_json_diff")
+    timezone = StringField("Timezone for watch schedule", render_kw={"list": "timezones"}, validators=[validateTimeZoneName()])
+    webdriver_delay = IntegerField('Wait seconds before extracting text', validators=[validators.Optional(), validators.NumberRange(min=1, message="Should contain one or more seconds")])
+
+
 class importForm(Form):
     from . import processors
     processor = RadioField(u'Processor', choices=processors.available_processors(), default="text_json_diff")
     urls = TextAreaField('URLs')
+    xlsx_file = FileField('Upload .xlsx file', validators=[FileAllowed(['xlsx'], 'Must be .xlsx file!')])
+    file_mapping = SelectField('File mapping', [validators.DataRequired()], choices={('wachete', 'Wachete mapping'), ('custom','Custom mapping')})
 
 class SingleBrowserStep(Form):
 
@@ -405,34 +548,38 @@ class SingleBrowserStep(Form):
 #    remove_button = SubmitField('-', render_kw={"type": "button", "class": "pure-button pure-button-primary", 'title': 'Remove'})
 #    add_button = SubmitField('+', render_kw={"type": "button", "class": "pure-button pure-button-primary", 'title': 'Add new step after'})
 
-class watchForm(commonSettingsForm):
+class processor_text_json_diff_form(commonSettingsForm):
 
     url = fields.URLField('URL', validators=[validateURL()])
     tags = StringTagUUID('Group tag', [validators.Optional()], default='')
 
     time_between_check = FormField(TimeBetweenCheckForm)
 
+    time_schedule_limit = FormField(ScheduleLimitForm)
+
+    time_between_check_use_default = BooleanField('Use global settings for time between check', default=False)
+
     include_filters = StringListField('CSS/JSONPath/JQ/XPath Filters', [ValidateCSSJSONXPATHInput()], default='')
 
-    subtractive_selectors = StringListField('Remove elements', [ValidateCSSJSONXPATHInput(allow_xpath=False, allow_json=False)])
+    subtractive_selectors = StringListField('Remove elements', [ValidateCSSJSONXPATHInput(allow_json=False)])
 
     extract_text = StringListField('Extract text', [ValidateListRegex()])
 
     title = StringField('Title', default='')
 
-    ignore_text = StringListField('Ignore text', [ValidateListRegex()])
+    ignore_text = StringListField('Ignore lines containing', [ValidateListRegex()])
     headers = StringDictKeyValue('Request headers')
     body = TextAreaField('Request body', [validators.Optional()])
     method = SelectField('Request method', choices=valid_method, default=default_method)
     ignore_status_codes = BooleanField('Ignore status codes (process non-2xx status codes as normal)', default=False)
-    check_unique_lines = BooleanField('Only trigger when unique lines appear', default=False)
+    check_unique_lines = BooleanField('Only trigger when unique lines appear in all history', default=False)
+    remove_duplicate_lines = BooleanField('Remove duplicate lines of text', default=False)
+    sort_text_alphabetically =  BooleanField('Sort text alphabetically', default=False)
+    trim_text_whitespace = BooleanField('Trim whitespace before and after text', default=False)
 
     filter_text_added = BooleanField('Added lines', default=True)
     filter_text_replaced = BooleanField('Replaced/changed lines', default=True)
     filter_text_removed = BooleanField('Removed lines', default=True)
-
-    # @todo this class could be moved to its own text_json_diff_watchForm and this goes to restock_diff_Watchform perhaps
-    in_stock_only = BooleanField('Only trigger when product goes BACK to in-stock', default=True)
 
     trigger_text = StringListField('Trigger/wait for text', [validators.Optional(), ValidateListRegex()])
     if os.getenv("PLAYWRIGHT_DRIVER_URL"):
@@ -440,7 +587,7 @@ class watchForm(commonSettingsForm):
     text_should_not_be_present = StringListField('Block change-detection while text matches', [validators.Optional(), ValidateListRegex()])
     webdriver_js_execute_code = TextAreaField('Execute JavaScript before change detection', render_kw={"rows": "5"}, validators=[validators.Optional()])
 
-    save_button = SubmitField('Save', render_kw={"class": "pure-button pure-button-primary"})
+    save_button = SubmitField('Save', render_kw={"class": "pure-button button-small pure-button-primary"})
 
     proxy = RadioField('Proxy')
     filter_failure_notification_send = BooleanField(
@@ -449,10 +596,17 @@ class watchForm(commonSettingsForm):
     notification_muted = BooleanField('Notifications Muted / Off', default=False)
     notification_screenshot = BooleanField('Attach screenshot to notification (where possible)', default=False)
 
+    def extra_tab_content(self):
+        return None
+
+    def extra_form_content(self):
+        return None
+
     def validate(self, **kwargs):
         if not super().validate():
             return False
 
+        from changedetectionio.safe_jinja import render as jinja_render
         result = True
 
         # Fail form validation when a body is set for a GET
@@ -461,32 +615,95 @@ class watchForm(commonSettingsForm):
             result = False
 
         # Attempt to validate jinja2 templates in the URL
-        from jinja2 import Environment
-        # Jinja2 available in URLs along with https://pypi.org/project/jinja2-time/
-        jinja2_env = Environment(extensions=['jinja2_time.TimeExtension'])
         try:
-            ready_url = str(jinja2_env.from_string(self.url.data).render())
-        except Exception as e:
-            self.url.errors.append('Invalid template syntax')
+            jinja_render(template_str=self.url.data)
+        except ModuleNotFoundError as e:
+            # incase jinja2_time or others is missing
+            logger.error(e)
+            self.url.errors.append(f'Invalid template syntax configuration: {e}')
             result = False
+        except Exception as e:
+            logger.error(e)
+            self.url.errors.append(f'Invalid template syntax: {e}')
+            result = False
+
+        # Attempt to validate jinja2 templates in the body
+        if self.body.data and self.body.data.strip():
+            try:
+                jinja_render(template_str=self.body.data)
+            except ModuleNotFoundError as e:
+                # incase jinja2_time or others is missing
+                logger.error(e)
+                self.body.errors.append(f'Invalid template syntax configuration: {e}')
+                result = False
+            except Exception as e:
+                logger.error(e)
+                self.body.errors.append(f'Invalid template syntax: {e}')
+                result = False
+
+        # Attempt to validate jinja2 templates in the headers
+        if len(self.headers.data) > 0:
+            try:
+                for header, value in self.headers.data.items():
+                    jinja_render(template_str=value)
+            except ModuleNotFoundError as e:
+                # incase jinja2_time or others is missing
+                logger.error(e)
+                self.headers.errors.append(f'Invalid template syntax configuration: {e}')
+                result = False
+            except Exception as e:
+                logger.error(e)
+                self.headers.errors.append(f'Invalid template syntax in "{header}" header: {e}')
+                result = False
+
         return result
+
+    def __init__(
+            self,
+            formdata=None,
+            obj=None,
+            prefix="",
+            data=None,
+            meta=None,
+            **kwargs,
+    ):
+        super().__init__(formdata, obj, prefix, data, meta, **kwargs)
+        if kwargs and kwargs.get('default_system_settings'):
+            default_tz = kwargs.get('default_system_settings').get('application', {}).get('timezone')
+            if default_tz:
+                self.time_schedule_limit.form.timezone.render_kw['placeholder'] = default_tz
+
 
 
 class SingleExtraProxy(Form):
 
     # maybe better to set some <script>var..
     proxy_name = StringField('Name', [validators.Optional()], render_kw={"placeholder": "Name"})
-    proxy_url = StringField('Proxy URL', [validators.Optional()], render_kw={"placeholder": "http://user:pass@...:3128", "size":50})
+    proxy_url = StringField('Proxy URL', [validators.Optional()], render_kw={"placeholder": "socks5:// or regular proxy http://user:pass@...:3128", "size":50})
     # @todo do the validation here instead
+
+class SingleExtraBrowser(Form):
+    browser_name = StringField('Name', [validators.Optional()], render_kw={"placeholder": "Name"})
+    browser_connection_url = StringField('Browser connection URL', [validators.Optional()], render_kw={"placeholder": "wss://brightdata... wss://oxylabs etc", "size":50})
+    # @todo do the validation here instead
+
+class DefaultUAInputForm(Form):
+    html_requests = StringField('Plaintext requests', validators=[validators.Optional()], render_kw={"placeholder": "<default>"})
+    if os.getenv("PLAYWRIGHT_DRIVER_URL") or os.getenv("WEBDRIVER_URL"):
+        html_webdriver = StringField('Chrome requests', validators=[validators.Optional()], render_kw={"placeholder": "<default>"})
 
 # datastore.data['settings']['requests']..
 class globalSettingsRequestForm(Form):
     time_between_check = FormField(TimeBetweenCheckForm)
+    time_schedule_limit = FormField(ScheduleLimitForm)
     proxy = RadioField('Proxy')
     jitter_seconds = IntegerField('Random jitter seconds ± check',
                                   render_kw={"style": "width: 5em;"},
                                   validators=[validators.NumberRange(min=0, message="Should contain zero or more seconds")])
     extra_proxies = FieldList(FormField(SingleExtraProxy), min_entries=5)
+    extra_browsers = FieldList(FormField(SingleExtraBrowser), min_entries=5)
+
+    default_ua = FormField(DefaultUAInputForm, label="Default User-Agent overrides")
 
     def validate_extra_proxies(self, extra_validators=None):
         for e in self.data['extra_proxies']:
@@ -500,11 +717,14 @@ class globalSettingsRequestForm(Form):
 class globalSettingsApplicationForm(commonSettingsForm):
 
     api_access_token_enabled = BooleanField('API access token security check enabled', default=True, validators=[validators.Optional()])
-    base_url = StringField('Base URL', validators=[validators.Optional()])
+    base_url = StringField('Notification base URL override',
+                           validators=[validators.Optional()],
+                           render_kw={"placeholder": os.getenv('BASE_URL', 'Not set')}
+                           )
     empty_pages_are_a_change =  BooleanField('Treat empty pages as a change?', default=False)
-    fetch_backend = RadioField('Fetch Method', default="html_requests", choices=content_fetcher.available_fetchers(), validators=[ValidateContentFetcherIsReady()])
+    fetch_backend = RadioField('Fetch Method', default="html_requests", choices=content_fetchers.available_fetchers(), validators=[ValidateContentFetcherIsReady()])
     global_ignore_text = StringListField('Ignore Text', [ValidateListRegex()])
-    global_subtractive_selectors = StringListField('Remove elements', [ValidateCSSJSONXPATHInput(allow_xpath=False, allow_json=False)])
+    global_subtractive_selectors = StringListField('Remove elements', [ValidateCSSJSONXPATHInput(allow_json=False)])
     ignore_whitespace = BooleanField('Ignore whitespace')
     password = SaltyPasswordField()
     pager_size = IntegerField('Pager size',
@@ -514,6 +734,8 @@ class globalSettingsApplicationForm(commonSettingsForm):
     removepassword_button = SubmitField('Remove password', render_kw={"class": "pure-button pure-button-primary"})
     render_anchor_tag_content = BooleanField('Render anchor tag content', default=False)
     shared_diff_access = BooleanField('Allow access to view diff page when password is enabled', default=False, validators=[validators.Optional()])
+    rss_hide_muted_watches = BooleanField('Hide muted watches from RSS feed', default=True,
+                                      validators=[validators.Optional()])
     filter_failure_notification_threshold_attempts = IntegerField('Number of times the filter can be missing before sending a notification',
                                                                   render_kw={"style": "width: 5em;"},
                                                                   validators=[validators.NumberRange(min=0,
@@ -524,10 +746,15 @@ class globalSettingsForm(Form):
     # Define these as FormFields/"sub forms", this way it matches the JSON storage
     # datastore.data['settings']['application']..
     # datastore.data['settings']['requests']..
+    def __init__(self, formdata=None, obj=None, prefix="", data=None, meta=None, **kwargs):
+        super().__init__(formdata, obj, prefix, data, meta, **kwargs)
+        self.application.notification_body.extra_notification_tokens = kwargs.get('extra_notification_tokens', {})
+        self.application.notification_title.extra_notification_tokens = kwargs.get('extra_notification_tokens', {})
+        self.application.notification_urls.extra_notification_tokens = kwargs.get('extra_notification_tokens', {})
 
     requests = FormField(globalSettingsRequestForm)
     application = FormField(globalSettingsApplicationForm)
-    save_button = SubmitField('Save', render_kw={"class": "pure-button pure-button-primary"})
+    save_button = SubmitField('Save', render_kw={"class": "pure-button button-small pure-button-primary"})
 
 
 class extractDataForm(Form):

@@ -68,7 +68,7 @@
   --color-last-checked: #bbb;
   --color-text-footer: #444;
   --color-border-watch-table-cell: #eee;
-  --color-text-watch-tag-list: #e70069;
+  --color-text-watch-tag-list: rgba(231, 0, 105, 0.4);
   --color-background-new-watch-form: rgba(0, 0, 0, 0.05);
   --color-background-new-watch-input: var(--color-white);
   --color-text-new-watch-input: var(--color-text);
@@ -111,7 +111,7 @@ html[data-darkmode="true"] {
   --color-background-input: var(--color-grey-350);
   --color-text-input-description: var(--color-grey-600);
   --color-text-input-placeholder: var(--color-grey-600);
-  --color-text-watch-tag-list: #fa3e92;
+  --color-text-watch-tag-list: rgba(250, 62, 146, 0.4);
   --color-background-code: var(--color-grey-200);
   --color-background-tab: rgba(0, 0, 0, 0.2);
   --color-background-tab-hover: rgba(0, 0, 0, 0.5);
@@ -126,6 +126,8 @@ html[data-darkmode="true"] {
   html[data-darkmode="true"] .watch-table .title-col a[target="_blank"]::after,
   html[data-darkmode="true"] .watch-table .current-diff-url::after {
     filter: invert(0.5) hue-rotate(10deg) brightness(2); }
+  html[data-darkmode="true"] .watch-table .status-browsersteps {
+    filter: invert(0.5) hue-rotate(10deg) brightness(1.5); }
   html[data-darkmode="true"] .watch-table .watch-controls .state-off img {
     opacity: 0.3; }
   html[data-darkmode="true"] .watch-table .watch-controls .state-on img {
@@ -151,7 +153,8 @@ html[data-darkmode="true"] {
     border: 1px solid transparent;
     vertical-align: top;
     font: 1em monospace;
-    text-align: left; }
+    text-align: left;
+    overflow: clip; }
   #diff-ui pre {
     white-space: pre-wrap; }
 
@@ -170,7 +173,9 @@ ins {
   text-decoration: none; }
 
 #result {
-  white-space: pre-wrap; }
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: break-word; }
 
 #settings {
   background: rgba(0, 0, 0, 0.05);
@@ -187,6 +192,10 @@ ins {
     padding: 0.5em; }
   #settings ins {
     padding: 0.5em; }
+  #settings option:checked {
+    font-weight: bold; }
+  #settings [type=radio], #settings [type=checkbox] {
+    vertical-align: middle; }
 
 .source {
   position: absolute;
@@ -218,3 +227,19 @@ td#diff-col div {
   text-align: center; }
   .tab-pane-inner#screenshot img {
     max-width: 99%; }
+
+#highlightSnippet {
+  background: var(--color-background);
+  padding: 1em;
+  border-radius: 5px;
+  background: var(--color-background);
+  box-shadow: 1px 1px 4px var(--color-shadow-jump); }
+
+.pure-form button.reset-margin {
+  margin: 0px; }
+
+.diff-fieldset {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap; }

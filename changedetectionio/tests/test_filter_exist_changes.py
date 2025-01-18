@@ -1,10 +1,10 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 
 # https://www.reddit.com/r/selfhosted/comments/wa89kp/comment/ii3a4g7/?context=3
 import os
 import time
 from flask import url_for
-from .util import set_original_response, live_server_setup
+from .util import set_original_response, live_server_setup, wait_for_notification_endpoint_output
 from changedetectionio.model import App
 
 
@@ -15,7 +15,7 @@ def set_response_without_filter():
      <p>Which is across multiple lines</p>
      <br>
      So let's see what happens.  <br>
-     <div id="nope-doesnt-exist">Some text thats the same</div>     
+     <div id="nope-doesnt-exist">Some text thats the same</div>
      </body>
      </html>
     """
@@ -32,7 +32,7 @@ def set_response_with_filter():
      <p>Which is across multiple lines</p>
      <br>
      So let's see what happens.  <br>
-     <div class="ticket-available">Ticket now on sale!</div>     
+     <div class="ticket-available">Ticket now on sale!</div>
      </body>
      </html>
     """
@@ -41,7 +41,7 @@ def set_response_with_filter():
         f.write(test_return_data)
     return None
 
-def test_filter_doesnt_exist_then_exists_should_get_notification(client, live_server):
+def test_filter_doesnt_exist_then_exists_should_get_notification(client, live_server, measure_memory_usage):
 #  Filter knowingly doesn't exist, like someone setting up a known filter to see if some cinema tickets are on sale again
 #  And the page has that filter available
 #  Then I should get a notification
@@ -84,6 +84,7 @@ def test_filter_doesnt_exist_then_exists_should_get_notification(client, live_se
                                                    "Snapshot: {{current_snapshot}}\n"
                                                    "Diff: {{diff}}\n"
                                                    "Diff Full: {{diff_full}}\n"
+                                                   "Diff as Patch: {{diff_patch}}\n"
                                                    ":-)",
                               "notification_format": "Text"}
 
@@ -101,14 +102,15 @@ def test_filter_doesnt_exist_then_exists_should_get_notification(client, live_se
         follow_redirects=True
     )
     assert b"Updated watch." in res.data
-    time.sleep(3)
+    wait_for_notification_endpoint_output()
 
     # Shouldn't exist, shouldn't have fired
     assert not os.path.isfile("test-datastore/notification.txt")
     # Now the filter should exist
     set_response_with_filter()
     client.get(url_for("form_watch_checknow"), follow_redirects=True)
-    time.sleep(3)
+
+    wait_for_notification_endpoint_output()
 
     assert os.path.isfile("test-datastore/notification.txt")
 

@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 
 from flask import make_response, request
 from flask import url_for
@@ -76,6 +76,26 @@ def set_more_modified_response():
     return None
 
 
+def set_empty_text_response():
+    test_return_data = """<html><body></body></html>"""
+
+    with open("test-datastore/endpoint-content.txt", "w") as f:
+        f.write(test_return_data)
+
+    return None
+
+def wait_for_notification_endpoint_output():
+    '''Apprise can take a few seconds to fire'''
+    #@todo - could check the apprise object directly instead of looking for this file
+    from os.path import isfile
+    for i in range(1, 20):
+        time.sleep(1)
+        if isfile("test-datastore/notification.txt"):
+            return True
+
+    return False
+
+
 # kinda funky, but works for now
 def extract_api_key_from_UI(client):
     import re
@@ -116,22 +136,25 @@ def extract_UUID_from_client(client):
     )
     # <span id="api-key">{{api_key}}</span>
 
-    m = re.search('edit/(.+?)"', str(res.data))
+    m = re.search('edit/(.+?)[#"]', str(res.data))
     uuid = m.group(1)
     return uuid.strip()
 
 def wait_for_all_checks(client):
+    # actually this is not entirely true, it can still be 'processing' but not in the queue
     # Loop waiting until done..
     attempt=0
-    time.sleep(0.1)
+    # because sub-second rechecks are problematic in testing, use lots of delays
+    time.sleep(1)
     while attempt < 60:
-        time.sleep(1)
         res = client.get(url_for("index"))
         if not b'Checking now' in res.data:
             break
         logging.getLogger().info("Waiting for watch-list to not say 'Checking now'.. {}".format(attempt))
-
+        time.sleep(1)
         attempt += 1
+
+    time.sleep(1)
 
 def live_server_setup(live_server):
 
@@ -140,6 +163,9 @@ def live_server_setup(live_server):
         import secrets
         return "Random content - {}\n".format(secrets.token_hex(64))
 
+    @live_server.app.route('/test-endpoint2')
+    def test_endpoint2():
+        return "<html><body>some basic content</body></html>"
 
     @live_server.app.route('/test-endpoint')
     def test_endpoint():
@@ -175,12 +201,16 @@ def live_server_setup(live_server):
     @live_server.app.route('/test-headers')
     def test_headers():
 
-        output= []
+        output = []
 
         for header in request.headers:
-             output.append("{}:{}".format(str(header[0]),str(header[1])   ))
+            output.append("{}:{}".format(str(header[0]), str(header[1])))
 
-        return "\n".join(output)
+        content = "\n".join(output)
+
+        resp = make_response(content, 200)
+        resp.headers['server'] = 'custom'
+        return resp
 
     # Just return the body in the request
     @live_server.app.route('/test-body', methods=['POST', 'GET'])
@@ -193,9 +223,10 @@ def live_server_setup(live_server):
     def test_method():
         return request.method
 
-    # Where we POST to as a notification
-    @live_server.app.route('/test_notification_endpoint', methods=['POST', 'GET'])
+    # Where we POST to as a notification, also use a space here to test URL escaping is OK across all tests that use this. ( #2868 )
+    @live_server.app.route('/test_notification endpoint', methods=['POST', 'GET'])
     def test_notification_endpoint():
+
         with open("test-datastore/notification.txt", "wb") as f:
             # Debug method, dump all POST to file also, used to prove #65
             data = request.stream.read()
@@ -205,13 +236,19 @@ def live_server_setup(live_server):
         with open("test-datastore/notification-url.txt", "w") as f:
             f.write(request.url)
 
+        with open("test-datastore/notification-headers.txt", "w") as f:
+            f.write(str(request.headers))
+
         if request.content_type:
             with open("test-datastore/notification-content-type.txt", "w") as f:
                 f.write(request.content_type)
 
         print("\n>> Test notification endpoint was hit.\n", data)
-        return "Text was set"
 
+        content = "Text was set"
+        status_code = request.args.get('status_code',200)
+        resp = make_response(content, status_code)
+        return resp
 
     # Just return the verb in the request
     @live_server.app.route('/test-basicauth', methods=['GET'])
@@ -234,6 +271,29 @@ def live_server_setup(live_server):
             resp = make_response(f.read(), 200)
             resp.headers['Content-Type'] = 'application/pdf'
             return resp
+
+    @live_server.app.route('/test-interactive-html-endpoint')
+    def test_interactive_html_endpoint():
+        header_text=""
+        for k,v in request.headers.items():
+            header_text += f"{k}: {v}<br>"
+
+        resp = make_response(f"""
+        <html>
+          <body>
+          Primitive JS check for <pre>changedetectionio/tests/visualselector/test_fetch_data.py</pre>
+            <p id="remove">This text should be removed</p>
+              <form onsubmit="event.preventDefault();">
+            <!-- obfuscated text so that we dont accidentally get a false positive due to conversion of the source :) --->
+                <button name="test-button" onclick="getElementById('remove').remove();getElementById('some-content').innerHTML = atob('SSBzbWVsbCBKYXZhU2NyaXB0IGJlY2F1c2UgdGhlIGJ1dHRvbiB3YXMgcHJlc3NlZCE=')">Click here</button>
+                <div id=some-content></div>
+                <pre>
+                {header_text.lower()}
+                </pre>
+              </body>
+         </html>""", 200)
+        resp.headers['Content-Type'] = 'text/html'
+        return resp
 
     live_server.start()
 

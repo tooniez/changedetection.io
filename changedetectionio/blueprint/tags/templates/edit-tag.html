@@ -1,7 +1,11 @@
 {% extends 'base.html' %}
 {% block content %}
-{% from '_helpers.jinja' import render_field, render_checkbox_field, render_button %}
-{% from '_common_fields.jinja' import render_common_settings_form %}
+{% from '_helpers.html' import render_field, render_checkbox_field, render_button %}
+{% from '_common_fields.html' import render_common_settings_form %}
+<script>
+    const notification_base_url="{{url_for('ajax_callback_send_notification_test', mode="group-settings")}}";
+</script>
+
 <script src="{{url_for('static_content', group='js', filename='tabs.js')}}" defer></script>
 <script>
 
@@ -13,7 +17,6 @@
 </script>
 
 <script src="{{url_for('static_content', group='js', filename='watch-settings.js')}}" defer></script>
-<!--<script src="{{url_for('static_content', group='js', filename='limit.js')}}" defer></script>-->
 <script src="{{url_for('static_content', group='js', filename='notifications.js')}}" defer></script>
 
 <div class="edit-form monospaced-textarea">
@@ -22,6 +25,9 @@
         <ul>
             <li class="tab" id=""><a href="#general">General</a></li>
             <li class="tab"><a href="#filters-and-triggers">Filters &amp; Triggers</a></li>
+            {% if extra_tab_content %}
+            <li class="tab"><a href="#extras_tab">{{ extra_tab_content }}</a></li>
+            {% endif %}
             <li class="tab"><a href="#notifications">Notifications</a></li>
         </ul>
     </div>
@@ -51,25 +57,26 @@ xpath://body/div/span[contains(@class, 'example-class')]",
                         {% if '/text()' in  field %}
                           <span class="pure-form-message-inline"><strong>Note!: //text() function does not work where the &lt;element&gt; contains &lt;![CDATA[]]&gt;</strong></span><br>
                         {% endif %}
-                        <span class="pure-form-message-inline">One rule per line, <i>any</i> rules that matches will be used.<br>
-
-                    <ul>
+                        <span class="pure-form-message-inline">One CSS, xPath, JSON Path/JQ selector per line, <i>any</i> rules that matches will be used.<br>
+                    <div data-target="#advanced-help-selectors" class="toggle-show pure-button button-tag button-xsmall">Show advanced help and tips</div>
+                    <ul id="advanced-help-selectors">
                         <li>CSS - Limit text to this CSS rule, only text matching this CSS rule is included.</li>
                         <li>JSON - Limit text to this JSON rule, using either <a href="https://pypi.org/project/jsonpath-ng/" target="new">JSONPath</a> or <a href="https://stedolan.github.io/jq/" target="new">jq</a> (if installed).
                             <ul>
                                 <li>JSONPath: Prefix with <code>json:</code>, use <code>json:$</code> to force re-formatting if required,  <a href="https://jsonpath.com/" target="new">test your JSONPath here</a>.</li>
                                 {% if jq_support %}
-                                <li>jq: Prefix with <code>jq:</code> and <a href="https://jqplay.org/" target="new">test your jq here</a>. Using <a href="https://stedolan.github.io/jq/" target="new">jq</a> allows for complex filtering and processing of JSON data with built-in functions, regex, filtering, and more. See examples and documentation <a href="https://stedolan.github.io/jq/manual/" target="new">here</a>.</li>
+                                <li>jq: Prefix with <code>jq:</code> and <a href="https://jqplay.org/" target="new">test your jq here</a>. Using <a href="https://stedolan.github.io/jq/" target="new">jq</a> allows for complex filtering and processing of JSON data with built-in functions, regex, filtering, and more. See examples and documentation <a href="https://stedolan.github.io/jq/manual/" target="new">here</a>. Prefix <code>jqraw:</code> outputs the results as text instead of a JSON list.</li>
                                 {% else %}
                                 <li>jq support not installed</li>
                                 {% endif %}
                             </ul>
                         </li>
-                        <li>XPath - Limit text to this XPath rule, simply start with a forward-slash,
+                        <li>XPath - Limit text to this XPath rule, simply start with a forward-slash. To specify XPath to be used explicitly or the XPath rule starts with an XPath function: Prefix with <code>xpath:</code>
                             <ul>
-                                <li>Example:  <code>//*[contains(@class, 'sametext')]</code> or <code>xpath://*[contains(@class, 'sametext')]</code>, <a
+                                <li>Example:  <code>//*[contains(@class, 'sametext')]</code> or <code>xpath:count(//*[contains(@class, 'sametext')])</code>, <a
                                 href="http://xpather.com/" target="new">test your XPath here</a></li>
                                 <li>Example: Get all titles from an RSS feed <code>//title/text()</code></li>
+                                <li>To use XPath1.0: Prefix with <code>xpath1:</code></li>
                             </ul>
                             </li>
                     </ul>
@@ -81,17 +88,25 @@ xpath://body/div/span[contains(@class, 'example-class')]",
                     {{ render_field(form.subtractive_selectors, rows=5, placeholder="header
 footer
 nav
-.stockticker") }}
+.stockticker
+//*[contains(text(), 'Advertisement')]") }}
                     <span class="pure-form-message-inline">
                         <ul>
-                          <li> Remove HTML element(s) by CSS selector before text conversion. </li>
-                          <li> Add multiple elements or CSS selectors per line to ignore multiple parts of the HTML. </li>
+                          <li> Remove HTML element(s) by CSS and XPath selectors before text conversion. </li>
+                          <li> Don't paste HTML here, use only CSS and XPath selectors </li>
+                          <li> Add multiple elements, CSS or XPath selectors per line to ignore multiple parts of the HTML. </li>
                         </ul>
                       </span>
                 </fieldset>
 
             </div>
 
+        {# rendered sub Template #}
+        {% if extra_form_content %}
+            <div class="tab-pane-inner" id="extras_tab">
+            {{ extra_form_content|safe }}
+            </div>
+        {% endif %}
             <div class="tab-pane-inner" id="notifications">
                 <fieldset>
                     <div  class="pure-control-group inline-radio">
@@ -114,7 +129,7 @@ nav
                         {% endif %}
                         <a href="#notifications" id="notification-setting-reset-to-default" class="pure-button button-xsmall" style="right: 20px; top: 20px; position: absolute; background-color: #5f42dd; border-radius: 4px; font-size: 70%; color: #fff">Use system defaults</a>
 
-                        {{ render_common_settings_form(form, emailprefix, settings_application) }}
+                        {{ render_common_settings_form(form, emailprefix, settings_application, extra_notification_token_placeholder_info) }}
                     </div>
                 </fieldset>
             </div>

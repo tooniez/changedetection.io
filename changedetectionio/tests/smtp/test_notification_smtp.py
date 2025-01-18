@@ -32,13 +32,15 @@ def get_last_message_from_smtp_server():
     client_socket.connect((smtp_test_server, port))  # connect to the server
 
     data = client_socket.recv(50024).decode()  # receive response
+    logging.info("get_last_message_from_smtp_server..")
+    logging.info(data)
     client_socket.close()  # close the connection
     return data
 
 
 # Requires running the test SMTP server
 
-def test_check_notification_email_formats_default_HTML(client, live_server):
+def test_check_notification_email_formats_default_HTML(client, live_server, measure_memory_usage):
     # live_server_setup(live_server)
     set_original_response()
 
@@ -71,6 +73,8 @@ def test_check_notification_email_formats_default_HTML(client, live_server):
 
     wait_for_all_checks(client)
     set_longer_modified_response()
+    time.sleep(2)
+
     client.get(url_for("form_watch_checknow"), follow_redirects=True)
     wait_for_all_checks(client)
 
@@ -81,14 +85,14 @@ def test_check_notification_email_formats_default_HTML(client, live_server):
 
     # The email should have two bodies, and the text/html part should be <br>
     assert 'Content-Type: text/plain' in msg
-    assert '(added) So let\'s see what happens.\n' in msg  # The plaintext part with \n
+    assert '(added) So let\'s see what happens.\r\n' in msg  # The plaintext part with \r\n
     assert 'Content-Type: text/html' in msg
     assert '(added) So let\'s see what happens.<br>' in msg  # the html part
     res = client.get(url_for("form_delete", uuid="all"), follow_redirects=True)
     assert b'Deleted' in res.data
 
 
-def test_check_notification_email_formats_default_Text_override_HTML(client, live_server):
+def test_check_notification_email_formats_default_Text_override_HTML(client, live_server, measure_memory_usage):
     # live_server_setup(live_server)
 
     # HTML problems? see this
@@ -97,6 +101,17 @@ def test_check_notification_email_formats_default_Text_override_HTML(client, liv
     set_original_response()
     global smtp_test_server
     notification_url = f'mailto://changedetection@{smtp_test_server}:11025/?to=fff@home.com'
+    notification_body = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>My Webpage</title>
+</head>
+<body>
+    <h1>Test</h1>
+    {default_notification_body}
+</body>
+</html>
+"""
 
     #####################
     # Set this up for when we remove the notification from the watch, it should fallback with these details
@@ -104,7 +119,7 @@ def test_check_notification_email_formats_default_Text_override_HTML(client, liv
         url_for("settings_page"),
         data={"application-notification_urls": notification_url,
               "application-notification_title": "fallback-title " + default_notification_title,
-              "application-notification_body": default_notification_body,
+              "application-notification_body": notification_body,
               "application-notification_format": 'Text',
               "requests-time_between_check-minutes": 180,
               'application-fetch_backend': "html_requests"},
@@ -124,6 +139,7 @@ def test_check_notification_email_formats_default_Text_override_HTML(client, liv
 
     wait_for_all_checks(client)
     set_longer_modified_response()
+    time.sleep(2)
     client.get(url_for("form_watch_checknow"), follow_redirects=True)
     wait_for_all_checks(client)
 
@@ -136,7 +152,7 @@ def test_check_notification_email_formats_default_Text_override_HTML(client, liv
     # The email should not have two bodies, should be TEXT only
 
     assert 'Content-Type: text/plain' in msg
-    assert '(added) So let\'s see what happens.\n' in msg  # The plaintext part with \n
+    assert '(added) So let\'s see what happens.\r\n' in msg  # The plaintext part with \r\n
 
     set_original_response()
     # Now override as HTML format
@@ -157,9 +173,14 @@ def test_check_notification_email_formats_default_Text_override_HTML(client, liv
 
     # The email should have two bodies, and the text/html part should be <br>
     assert 'Content-Type: text/plain' in msg
-    assert '(removed) So let\'s see what happens.\n' in msg  # The plaintext part with \n
+    assert '(removed) So let\'s see what happens.\r\n' in msg  # The plaintext part with \n
     assert 'Content-Type: text/html' in msg
     assert '(removed) So let\'s see what happens.<br>' in msg  # the html part
+
+    # https://github.com/dgtlmoon/changedetection.io/issues/2103
+    assert '<h1>Test</h1>' in msg
+    assert '&lt;' not in msg
+    assert 'Content-Type: text/html' in msg
 
     res = client.get(url_for("form_delete", uuid="all"), follow_redirects=True)
     assert b'Deleted' in res.data
